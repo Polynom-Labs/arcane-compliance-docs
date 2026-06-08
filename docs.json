@@ -14,6 +14,8 @@
         "group": "Architecture",
         "pages": [
           "architecture/overview",
+          "architecture/core-components",
+          "architecture/data-and-access-flows",
           "architecture/reference-applications",
           "architecture/cryptography",
           "architecture/audit-system",
@@ -21,6 +23,12 @@
           "architecture/on-chain-indexing",
           "architecture/audit-events-and-interpretation",
           "architecture/disclosure-cases-and-reports"
+        ]
+      },
+      {
+        "group": "Integration",
+        "pages": [
+          "integration/stellar-privacy-pool"
         ]
       },
       {

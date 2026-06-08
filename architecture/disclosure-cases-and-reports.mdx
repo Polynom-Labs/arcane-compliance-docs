@@ -89,16 +89,16 @@ Report generation on case detail routes requires **Reports and logs — Create a
 
 The auditors log records platform actions after successful handler responses. Each entry includes:
 
-- `event_type`, `user`, `org_id`, `workos_user_id`
+- `event_type`, `user`, `org_id`, external identity user reference
 - Typed `object` and `details` JSONB (with `type` and `version`)
-- Optional `application_foreign_id` and `case_id`
+- Optional application and case references
 
 List scopes:
 
 | Scope | Endpoint pattern | Permission |
 | --- | --- | --- |
 | Organization | `GET /api/auditors-log` | Organization ownership — View organization activity log (`logs:view_activity`) |
-| Application | `GET .../applications/:foreignId/auditors-log` | Common access — View activity log (`logs:view_activity`) |
+| Application | `GET .../applications/:applicationId/auditors-log` | Common access — View activity log (`logs:view_activity`) |
 | Case | `GET .../cases/:caseId/auditors-log` | Reports and logs — View transactions (`reports:view_transactions`) |
 
 Events are staged during request handling and persisted only after a successful response.

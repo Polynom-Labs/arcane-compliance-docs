@@ -7,67 +7,85 @@ Audit interpretation transforms encrypted on-chain events into normalized record
 
 ## Audit events
 
-An audit event is the encrypted raw record stored after chain ingestion. Each row includes an `event_type`, `cyphertext`, and metadata from the indexing phase.
+An audit event is the encrypted raw record stored after chain ingestion. Each row includes an event type, encrypted payload, and metadata from the indexing phase.
 
-### Stellar private pool events
-
-| Event type | Description |
-| --- | --- |
-| `deposit` | Tokens locked; new commitment added |
-| `withdraw` | Commitment spent; tokens withdrawn |
-| `transact` | Combined spend, public withdrawal, and deposit in one proof |
-
-### Confidential transfer events
+### Stellar privacy-pool events
 
 | Event type | Description |
 | --- | --- |
-| `ct_deposit` / `ct_withdraw` / `ct_transfer` | CT token movements |
-| `ct_transfer_with_fee` | Transfer with fee component |
-| `ct_configure` / `ct_approve_account` | Configuration and approval |
-| `conf_mint` / `conf_burn` / `public_mint` / `public_burn` | Mint and burn variants |
-| Account lifecycle events | `ct_empty_account`, `close_account`, credit toggles, etc. |
+| `deposit` | Tokens locked into the pool and a new commitment added |
+| `withdraw` | Commitment spent and tokens withdrawn to a public address |
+| `transact` | Combined spend, public withdrawal, and new deposit in one proof |
+
+The exact event payload depends on the privacy-pool contract version. The architecture boundary is stable: the indexer stores raw encrypted rows, and the interpretation worker converts those rows into normalized records.
 
 ## Why two phases?
 
-Raw events are chain-specific and encrypted. Disclosure UIs need normalized transaction views with sender, recipient, amount, and period filters. Interpretation:
+Raw events are chain-specific and encrypted. Disclosure UIs need normalized transaction views with fields such as transaction identifier, period, sender-side information, and recipient-side information.
 
-1. Decrypts `cyphertext` using the contract's decoding key
-2. Plans one or more interpretation records per audit row
-3. Persists structured payloads for case transaction queries and reports
+Interpretation:
+
+1. Reads raw indexed audit rows.
+2. Decrypts or resolves encrypted payloads under the configured key model.
+3. Validates event structure.
+4. Plans one or more interpreted records per audit row.
+5. Persists structured payloads for case transaction queries and reports.
 
 Keeping ingestion and interpretation separate allows indexers to run continuously while interpretation catches up in batches.
 
 ## Interpreted records
 
-Each `audit_interpretation` row includes:
+Each interpreted record contains normalized fields used by cases, reports, and review workflows.
 
 | Field | Description |
 | --- | --- |
-| `audit_id` | Source audit row |
-| `seq` | Sequence when multiple interpretations exist per audit |
-| `kind` | `deposit`, `withdraw`, or `transfer` |
-| `payload` | JSONB with normalized transaction fields |
-| `amount_stroops` | Optional parsed amount |
+| Source audit row | Link to the raw indexed event |
+| Sequence | Position when one audit event produces multiple interpreted records |
+| Kind | Normalized operation kind, such as `deposit`, `withdraw`, or `transfer` |
+| Payload | Structured transaction fields |
+| Amount | Parsed amount when available and permitted |
+| Period metadata | Ledger or timestamp fields used for case filtering |
+
+Interpreted records are not automatically visible to auditors. The Audit API still applies organization, application, case assignment, approved disclosure scope, access-window, and permission checks.
 
 ## Batch processing
 
-`AuditInterpretationRunnerService` runs every 12 seconds:
+The interpretation worker runs asynchronously.
 
-1. Opens a database transaction
-2. Locks up to 25 uninterpreted audit rows
-3. Routes each row to the Stellar or CT pipeline based on event type
-4. Writes interpretation rows or stores an `interpretation_error` on the audit row
+Typical batch behavior:
 
-Stellar pipeline: decrypt cyphertext via `@auditable/stellar-audit`, run branch planners (deposit/withdraw/transfer), persist results.
-
-CT pipeline: parallel path for Solana confidential transfer payloads.
+1. Open a database transaction.
+2. Lock a bounded set of uninterpreted audit rows.
+3. Route each row to the Stellar privacy-pool interpretation path.
+4. Decrypt or resolve payload data.
+5. Validate event structure.
+6. Write interpretation rows.
+7. Store an interpretation error on the audit row if processing fails.
 
 ## Disclosure-aware display
 
-Interpretation payloads feed case transaction tables. Sender and recipient fields respect disclosure scope:
+Interpretation payloads feed case transaction tables. Sender, recipient, transaction identifier, and amount fields respect disclosure scope.
 
-- With `sender_information` enabled, Stellar events resolve sender data from interpretation payloads when available
-- Stellar `deposit`/`withdraw`/`transact` rows may show **Hidden by policy** until `signer_account` is mapped from audit metadata
-- Recipient is derived via `receiverSideFromPayload` in the cases transaction mapper
+Examples:
+
+- A case with transaction identifier scope can expose full transaction identifiers.
+- A case with sender information scope can expose sender-side fields where available.
+- A case with recipient information scope can expose recipient-side fields where available.
+- Fields outside the approved scope remain hidden by policy.
 
 Approved disclosure scope on the case request controls which fields appear in the UI and exported reports.
+
+## Error handling
+
+Interpretation errors are stored with the source audit row so operators can distinguish:
+
+- Events that have not been interpreted yet
+- Events that were interpreted successfully
+- Events that failed validation
+- Events whose encrypted payload could not be decrypted or resolved
+
+Indexing and interpretation failures are separate. A row can be indexed successfully and still fail interpretation.
+
+## Multi-chain extension point
+
+Additional chains or privacy rails require their own raw event adapters and interpretation planners. They can share Arcane's disclosure workflows only after their events are normalized into the same interpreted record boundary.

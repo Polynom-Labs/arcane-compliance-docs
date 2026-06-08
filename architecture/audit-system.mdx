@@ -1,60 +1,100 @@
 ---
 title: "Audit system"
-description: "The audit control plane: major subsystems, tenant model, and audit UI workspaces."
+description: "Backend control plane, storage, workers, API, and UI workspaces for scoped disclosure."
 ---
 
-The audit system is the platform control plane for selective disclosure of private transaction data. It combines a backend service, PostgreSQL storage, scheduled background jobs, and the audit UI.
+The audit system is the off-chain control plane for selective disclosure of private transaction data. It combines backend services, PostgreSQL storage, scheduled background jobs, an Audit API, and an Audit UI.
 
 ## Major subsystems
 
-The backend is a NestJS application backed by PostgreSQL. Schema migrations run automatically on startup. Scheduled jobs drive ledger scanning and audit interpretation batches.
+The backend persists audit data and workflow state in PostgreSQL. Scheduled jobs drive ledger scanning and audit interpretation batches.
 
 | Subsystem | Responsibility |
 | --- | --- |
-| WorkOS identity | Organizations, users, memberships, OAuth, and Magic Auth email OTP |
-| Auth | Maps authenticated sessions to organization and application permission buckets |
-| On-chain indexing | Multi-chain ledger scanners (Stellar RPC and Solana indexer clients) that ingest raw audit events |
+| Enterprise identity boundary | User authentication and organization membership source |
+| Auth and permissions | Maps authenticated sessions to organization and application permission buckets |
+| Application and contract registry | Stores application records, registered Soroban contracts, and org-scoped contract lists |
+| Stellar indexing | Scans configured Stellar ledgers and ingests Soroban privacy-pool events |
 | Audit storage | Persists encrypted raw audit rows from indexed chain activity |
 | Audit interpretation | Decrypts and normalizes indexed events into disclosure-ready records |
-| Disclosure and cases | Disclosure requests, investigation cases, transactions, and analytics |
-| Applications and contracts | Application registration, contract registry, and org-scoped contract lists |
-| Team and organization admin | Organization bootstrap, team sync, and administrator actions |
-| Reports | Transaction summary CSV generation and scoped report listing |
-| Auditors log | Immutable compliance trail at organization, application, and case scope |
-| Audit API | HTTP surface that exposes the subsystems above to the audit UI |
-| Audit UI | Organization owner and application workspaces for disclosure workflows |
+| Disclosure and cases | Disclosure requests, investigation cases, assigned auditors, periods, scopes, and access windows |
+| Team and organization admin | Organization bootstrap, team membership, and administrator actions |
+| Reports | Transaction summary generation, activity-log exports, scoped report listing, and downloads |
+| Activity log | Compliance trail at organization, application, and case scope |
+| Audit API | HTTP surface that exposes backend capabilities to the Audit UI |
+| Audit UI | Organization owner, application administrator, and auditor workspaces |
 
 ## Tenant model
 
-Every query is scoped to an organization:
+Every query is scoped to an organization.
 
-- **Organizations** own team members, applications, and org-level activity
-- **Applications** map to contract-backed `foreign_id` values (for example `contract-{id}`)
-- **Cases** bind disclosure scope to a specific application and investigation period
+- **Organizations** own team members, applications, contracts, and org-level activity.
+- **Applications** group one or more registered privacy-pool contracts under an organization.
+- **Contracts** define the on-chain event sources that indexers scan and classify.
+- **Cases** bind disclosure scope to a specific application, investigation period, access window, and assigned auditors.
 
 An organization owner registers applications and manages team access. Application workspaces expose case review, disclosure requests, reports, and audit logs to users with the appropriate permission keys.
 
 ## Audit UI workspaces
 
-The audit UI resolves workspaces from `GET /auth/me`:
+The Audit UI resolves workspaces from the authenticated session:
 
 | Workspace | Route prefix | Primary users |
 | --- | --- | --- |
-| Organization owner | `/workspace/organization-owner/*` | Org owners |
-| Application | `/workspace/application/:foreignId/*` | App administrators and auditors |
+| Organization owner | `/workspace/organization-owner/*` | Organization owners |
+| Application | `/workspace/application/:applicationId/*` | Application administrators and auditors |
 
 Organization owner navigation includes Overview, Applications, Team, Audit Log, and Reports.
 
-Application workspace navigation includes Overview, Case Review, Disclosure Requests, Reports, Audit Log, and Settings. Nav items are filtered by permission keys.
+Application workspace navigation includes Overview, Case Review, Disclosure Requests, Reports, Audit Log, and Settings. Navigation items are filtered by permission keys.
 
 ## End-to-end pipeline
 
-1. **Chain events** — Stellar and Solana transactions emit auditable on-chain activity.
-2. **RPC indexers** — On-chain modules scan ledgers and ingest raw events.
-3. **Encrypted audit storage** — Indexed rows persist in the audit table as encrypted payloads.
-4. **Audit interpretation** — A background runner decrypts and normalizes events into disclosure-ready records.
-5. **Interpretation records** — Normalized rows become available for case-scoped queries and analytics.
-6. **Disclosure cases** — Approved cases bind users and scope to specific interpretation data.
-7. **Audit UI** — Organization owners, administrators, and auditors access cases, transactions, reports, and activity logs through the web application.
+1. **Chain events**: Soroban privacy-pool contracts emit auditable on-chain activity.
+2. **Stellar RPC scanner**: The indexer scans ledgers and ingests raw events from registered contracts.
+3. **Encrypted audit storage**: Indexed rows persist as encrypted audit payloads and metadata.
+4. **Audit interpretation**: A background worker decrypts, validates, and normalizes events into disclosure-ready records.
+5. **Interpreted records**: Normalized rows become available for case-scoped queries and analytics.
+6. **Disclosure cases**: Approved cases bind users, time period, requested fields, and contract/application scope to interpretation data.
+7. **Audit UI**: Organization owners, administrators, and auditors access cases, transactions, reports, and activity logs through the web application.
 
-See [On-chain indexing](/architecture/on-chain-indexing) for ingestion details and [Disclosure, cases, and reports](/architecture/disclosure-cases-and-reports) for the disclosure lifecycle.
+```mermaid
+flowchart LR
+  contract["Soroban privacy-pool contract"]
+  scanner["Stellar RPC scanner"]
+  raw["Raw encrypted audit rows"]
+  worker["Audit interpretation worker"]
+  records["Interpreted audit records"]
+  cases["Disclosure cases"]
+  api["Audit API"]
+  ui["Audit UI"]
+  log["Activity log"]
+
+  contract --> scanner --> raw --> worker --> records --> cases --> api --> ui
+  api --> log
+```
+
+## Permission enforcement
+
+The Audit API enforces permissions server-side before returning or mutating sensitive data.
+
+Permission checks account for:
+
+- Organization membership
+- Application access
+- Administrator or auditor role bucket
+- Case assignment
+- Approved disclosure scope
+- Access-window validity
+- Report creation, listing, and download permissions
+- Activity-log visibility
+
+Client-side navigation uses the same permission shape to hide unavailable routes and actions. API enforcement remains the source of truth.
+
+## Related pages
+
+- [Core components](/architecture/core-components)
+- [Data and access flows](/architecture/data-and-access-flows)
+- [On-chain indexing](/architecture/on-chain-indexing)
+- [Audit events and interpretation](/architecture/audit-events-and-interpretation)
+- [Disclosure, cases, and reports](/architecture/disclosure-cases-and-reports)

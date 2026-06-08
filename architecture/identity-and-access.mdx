@@ -1,20 +1,20 @@
 ---
 title: "Identity and access"
-description: "WorkOS identity, workspaces, permission buckets, and enforcement in the audit platform."
+description: "Enterprise identity, workspaces, permission buckets, and enforcement in the audit platform."
 ---
 
-Identity and access control who can see and do what in the audit platform. WorkOS manages users and organizations. The Arcane auth module maps authenticated sessions into fine-grained permission buckets enforced by the backend and mirrored in the audit UI.
+Identity and access control who can see and do what in the audit platform. Arcane integrates with an enterprise identity provider for authentication and organization membership. The Arcane auth module maps authenticated sessions into fine-grained permission buckets enforced by the backend and mirrored in the audit UI.
 
 Permission names below match the **Group** and **Permission** labels on the organization owner team access invite and member edit forms.
 
-## WorkOS identity
+## Enterprise identity boundary
 
-WorkOS User Management provides:
+The identity provider boundary provides:
 
 - Organization membership and invitations
 - Google OAuth and Magic Auth email OTP sign-in
 - Organization selection before session completion
-- JWT-based sessions verified against WorkOS JWKS
+- JWT-based sessions verified against the identity provider's signing keys
 
 Users must select an organization before their session completes. Users with no allowed organization or no membership in the selected organization do not receive a session.
 
@@ -27,7 +27,7 @@ Users must select an organization before their session completes. Users with no 
   "organization_info": { "org_id": "org_...", "name": "Example Org" },
   "owner": { "applications:read": true },
   "applications": {
-    "contract-42": {
+    "app_42": {
       "application_info": { "name": "Payments App" },
       "common": { "logs:view_activity": true },
       "administrator": { "cases:approve_creation": true },
@@ -38,7 +38,7 @@ Users must select an organization before their session completes. Users with no 
 ```
 
 - **`owner`** — present only when the caller has organization owner permissions
-- **`applications[foreignId]`** — per-application buckets when the user has application-scoped grants
+- **`applications[applicationId]`** — per-application buckets when the user has application-scoped grants
 
 The example above includes **Organization ownership — Read applications**, **Common access — View activity log**, **Case governance — Approve case creation**, and **Reports and logs — View transactions**.
 
@@ -52,7 +52,7 @@ The audit UI builds a workspace picker from `auth/me`:
 Routes:
 
 - Organization owner: `/workspace/organization-owner/*`
-- Application: `/workspace/application/:foreignId/*`
+- Application: `/workspace/application/:applicationId/*`
 
 ## Organization owner permissions
 
@@ -115,7 +115,7 @@ Case workspace tabs use similar mappings. The Review, Case Auditors, and Activit
 
 ## Enforcement
 
-The audit API checks required permission keys on every request against the assembled `auth/me` object. Application-scoped endpoints use the matching `applications[foreignId]` bucket; organization-scoped endpoints use the `owner` bucket.
+The audit API checks required permission keys on every request against the assembled `auth/me` object. Application-scoped endpoints use the matching application permission bucket; organization-scoped endpoints use the `owner` bucket.
 
 The audit UI applies the same permission keys to navigation, pages, and write actions. Users only see destinations and controls their session allows.
 

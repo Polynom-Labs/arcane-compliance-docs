@@ -1,0 +1,236 @@
+---
+title: "Core components"
+description: "Technical components in the Stellar/Soroban privacy-pool compliance architecture."
+---
+
+Arcane Compliance on Stellar is composed of client-side applications, Soroban privacy contracts, chain-ingestion services, storage, backend workers, and auditor-facing API/UI surfaces.
+
+## Reference applications
+
+Reference applications are external client applications that demonstrate or integrate with the privacy pool.
+
+Responsibilities:
+
+- Provide user-facing deposit, transfer, transact, and withdrawal flows
+- Connect to a supported Stellar wallet
+- Use the privacy SDK for private-address handling, coin generation, proof generation, and transaction construction
+- Submit transactions to the Soroban privacy-pool contract
+
+Non-responsibilities:
+
+- Disclosure case management
+- Arcane backend processing
+- Audit permission enforcement
+
+Private-pool operations such as deposit, withdraw, transfer, and transact belong to the privacy-pool contract and protocol layer. The reference application invokes these operations; it does not define the audit system.
+
+## Wallet and SDK layer
+
+The wallet and SDK layer sits between user-facing applications and the on-chain privacy pool.
+
+Responsibilities:
+
+- Wallet connection and transaction signing
+- Private address generation
+- Coin construction and local secret handling
+- Merkle witness preparation where applicable
+- Proof generation and serialization
+- Transaction submission helpers
+
+See [Cryptography](/architecture/cryptography) for commitments, nullifiers, private addresses, and SDK setup.
+
+## Soroban ZK privacy-pool contract
+
+The privacy-pool contract is the on-chain component responsible for private asset movement.
+
+Responsibilities:
+
+- Accept deposits into the pool
+- Create and store commitments
+- Maintain the commitment Merkle tree
+- Track nullifier hashes to prevent double spending
+- Maintain recent Merkle root history
+- Verify zero-knowledge proofs
+- Execute withdrawals, transfers, or combined transact flows
+- Emit audit-relevant contract events or audit payload digests
+
+Public state includes only the information intentionally exposed by the protocol, such as commitments, nullifier hashes, root history, and encoded event data. Sender, recipient, and amount remain private unless a specific operation intentionally discloses them.
+
+## Contract events and audit payloads
+
+Contract events are the bridge between the on-chain privacy layer and the Arcane audit platform.
+
+They can include:
+
+- Commitment events
+- Nullifier usage events
+- Pool operation identifiers
+- Contract address or application binding data
+- Encrypted audit payload digests or references
+- Ledger or transaction metadata required for indexing
+
+The event model distinguishes public contract data, encrypted audit data, and fields available only after interpretation or approved disclosure.
+
+## Application and contract registry
+
+The platform tracks which contracts belong to which organization and application context.
+
+Responsibilities:
+
+- Register organizations
+- Register applications
+- Register contract addresses or pool identifiers
+- Bind indexed events to the relevant organization/application
+- Provide scoped contract lists to indexers and backend services
+
+Application-contract binding is the link between on-chain events and case-scoped audit workflows.
+
+## Chain indexer
+
+The chain indexer is the ingestion boundary between Stellar and Arcane.
+
+Responsibilities:
+
+- Read ledgers from configured Stellar RPC providers
+- Filter events from registered Soroban privacy-pool contracts
+- Parse audit-relevant events
+- Maintain checkpoints or cursors
+- Retry failed reads
+- Write raw encrypted audit events to storage
+
+The Stellar implementation uses Stellar RPC scanning and Soroban event parsing. Additional chains require separate chain-specific adapters before their events can enter the shared audit storage and interpretation model.
+
+## PostgreSQL data layer
+
+The data layer is an explicit architecture boundary.
+
+Main datasets:
+
+- Raw encrypted audit events
+- Interpreted audit records
+- Organizations and users
+- Applications and contract registrations
+- Disclosure requests and case records
+- Case auditor assignments
+- Reports and export metadata
+- Activity log entries
+
+## Raw encrypted audit event store
+
+This store contains indexed events before they become disclosure-ready records.
+
+Typical fields:
+
+- Organization/application reference
+- Contract address or pool identifier
+- Ledger and transaction reference
+- Event type
+- Encrypted payload or payload digest
+- Indexing status
+- Timestamps
+
+## Audit interpretation worker
+
+The interpretation worker is an asynchronous backend process.
+
+Responsibilities:
+
+- Read raw encrypted audit events
+- Decrypt or resolve payloads under the configured key model
+- Validate event structure
+- Normalize events into records used by disclosure cases and reports
+- Mark interpretation status and errors
+
+Interpretation is a backend processing step. Human access is controlled by organization permissions, case scope, assigned auditors, approvals, and access windows.
+
+## Interpreted audit records
+
+Interpreted audit records are normalized records queried for cases, reports, and review workflows.
+
+They can include:
+
+- Transaction lifecycle information
+- Sender-side fields where available and permitted
+- Recipient-side fields where available and permitted
+- Transaction identifiers
+- Contract/application mapping
+- Time period and status metadata
+
+Access to interpreted records is scoped by permissions, case assignment, requested fields, approved period, contract filters, and access-window rules.
+
+## Identity and access module
+
+The public architecture treats identity as an enterprise identity provider boundary.
+
+Responsibilities:
+
+- Authenticate users through an external identity provider
+- Map external identity to Arcane organization membership
+- Resolve organization owner, application administrator, auditor, and other permission buckets
+- Enforce permission checks before API actions
+
+See [Identity and access](/architecture/identity-and-access) for workspace resolution and permission keys.
+
+## Disclosure request and case service
+
+Disclosure is a feature of the audit platform.
+
+Responsibilities:
+
+- Create disclosure requests
+- Capture basis, reason, time period, scope fields, and assigned auditors
+- Track pending, approved, rejected, withdrawn, or closed state
+- Create approved investigation cases
+- Enforce access windows
+- Filter case worklists by assigned auditors and approved scope
+
+A disclosure case grants scoped access to matching interpreted records. It does not grant global access to private data.
+
+## Reports and export service
+
+Reports convert scoped case data into downloadable outputs.
+
+Responsibilities:
+
+- Generate transaction summaries
+- Generate activity-log exports
+- Store report metadata
+- Enforce report creation, listing, and download permissions
+- Include boundary metadata such as organization, application, case, period, and generated-by user
+
+## Activity log
+
+The activity log is a cross-cutting audit trail.
+
+It records:
+
+- Organization and team changes
+- Application registration changes
+- Permission changes
+- Disclosure request creation
+- Approval, rejection, withdrawal, or closure
+- Case access
+- Report generation
+- Export download
+
+## Audit API
+
+The Audit API is the backend interface used by the Audit UI.
+
+Responsibilities:
+
+- Resolve authenticated session context
+- Serve organization, application, case, report, and activity-log data
+- Enforce permissions before returning scoped data
+- Trigger report generation
+- Record activity-log events for sensitive actions
+
+## Audit UI
+
+The Audit UI is the frontend surface for administrator and auditor workflows.
+
+Workspaces:
+
+- Organization owner workspace
+- Application administrator workspace
+- Auditor/case-review workspace
