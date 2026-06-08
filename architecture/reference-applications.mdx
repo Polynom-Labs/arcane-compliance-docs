@@ -1,0 +1,65 @@
+---
+title: "Reference applications"
+description: "How user-facing private transfer applications connect to Soroban privacy pool contracts."
+---
+
+A deployment can contain many reference transfer applications. Each application is a user-facing private transfer experience connected to one or more on-chain private pool contracts. The architecture diagram shows multiple application boxes without internal implementation detail.
+
+## Application layer
+
+Each reference application typically includes:
+
+- A wallet-connected UI for deposits, withdrawals, and transfers
+- Integration with the privacy pool client SDK for coin generation, proofs, and stealth addresses
+- Configuration that maps the app to one or more registered pool contract addresses
+
+Applications do not share pool state directly. They interact with Soroban contracts on Stellar. The audit system indexes the same contracts independently.
+
+## Private pool operations
+
+| Operation | Description |
+| --- | --- |
+| Deposit | Lock tokens into the pool and create a cryptographic commitment |
+| Withdraw | Prove ownership of a commitment and withdraw tokens to a public address |
+| Transfer | Spend an existing commitment and create new commitments for recipients |
+| Transact | Advanced flow that combines spends, public withdrawals, and new deposits in one proof |
+
+Deposits and transfers keep sender, recipient, and amount private on-chain. Only commitments and nullifier hashes appear in public state.
+
+## Soroban smart contract layer
+
+The privacy pool contract in `soroban-privacy-pools` implements:
+
+- **Commitment Merkle tree** — Lean incremental Merkle tree (LeanIMT) stores pool commitments
+- **Nullifier tracking** — Prevents double-spending by recording consumed nullifier hashes
+- **Root history** — Ring buffer of recent Merkle roots for proof verification
+- **Groth16 verification** — On-chain zkSNARK proof verification using BLS12-381
+- **Association sets** — Optional membership verification at withdrawal time
+- **Audit event digests** — Encoded audit payloads emitted for the audit backend to index
+
+Ephemeral BabyJubJub public keys are stored per leaf but are not part of the Merkle hash. They enable recipient-side shared-secret recovery during withdrawal.
+
+## Client SDK (conceptual)
+
+The `@auditable/privacy-pool-zk-sdk` package provides off-chain helpers:
+
+- Coin generation with random or deposit-aligned secrets
+- Merkle witness construction for withdrawal proofs
+- Groth16 proof generation and Soroban serialization
+- Stealth private address encoding (`stpl1`) and ECDH shared-secret derivation
+
+See [Cryptography](/architecture/cryptography) for commitment formulas, nullifiers, private addresses, and SDK setup.
+
+## Relationship to the audit system
+
+```
+Reference app  →  Soroban pool contract  →  On-chain audit events
+                                                      ↓
+                                              Audit system indexers
+                                                      ↓
+                                              Interpretation pipeline
+                                                      ↓
+                                              Disclosure cases (scoped access)
+```
+
+Reference applications never call the audit API directly for end-user transfers. The audit system observes the same contracts through configured indexers and contract registrations tied to organization applications.

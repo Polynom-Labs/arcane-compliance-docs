@@ -1,0 +1,65 @@
+---
+title: "Review case transactions"
+description: "How assigned auditors review transaction data in an approved investigation case."
+---
+
+After an administrator approves a disclosure case, assigned auditors review transactions within the approved scope and period. Fields outside the scope display as restricted.
+
+## Prerequisites
+
+- Case assignment for the investigation case
+- **Reports and logs — View transactions** (`reports:view_transactions`)
+- Case status: approved and within the access window
+
+## Workflow
+
+<Steps>
+  <Step title="Open Case Review">
+    Sign in and select your application workspace. In the sidebar, click **Case Review**.
+  </Step>
+  <Step title="Select an approved case">
+    Use search and status filters to find an approved case assigned to you. Click the case row to open the case workspace.
+  </Step>
+  <Step title="Review transactions">
+    Open the **Review** tab. Inspect the transaction table and any summary metrics or analytics shown for the case period.
+  </Step>
+  <Step title="Inspect disclosure effects">
+    Check sender and recipient columns. Values outside the approved disclosure scope may show **Hidden by policy**.
+  </Step>
+</Steps>
+
+## Scoped access
+
+Case lists and worklist endpoints return only cases assigned to the current user. You cannot open cases you are not assigned to, even with **Reports and logs — View transactions** (`reports:view_transactions`).
+
+Disclosure scope from the approved case request controls visible fields:
+
+| Scope | Visible data |
+| --- | --- |
+| Transaction identifiers | Full transaction id values |
+| Sender information | Sender address data where interpretation provides it |
+| Recipient information | Recipient-side data where interpretation provides it |
+
+Stellar private pool events may keep sender data hidden until the backend maps `signer_account` from audit metadata.
+
+## Related actions
+
+From the case workspace you can also:
+
+- Open the **Reports** tab to generate transaction summary exports (requires **Reports and logs — Create application reports** (`reports:create`))
+- Open the **Case Auditors** tab to view assignments (administrators with **Case governance — Edit case auditors** (`cases:edit`) can modify)
+- Open the **Activity** tab for case-scoped audit log entries
+
+## Screenshots to capture
+
+<Note>
+Add the following screenshots when documenting this workflow. Use the exact navigation labels and button names shown.
+</Note>
+
+| # | Screen | What to capture |
+| --- | --- | --- |
+| 1 | Application sidebar | **Case Review** selected |
+| 2 | Case Review queue | Summary metrics, filters, and an approved case row |
+| 3 | Case workspace | **Review** tab selected |
+| 4 | Transaction table | At least one row showing **Hidden by policy** for restricted sender or recipient data |
+| 5 | Transaction detail | Analytics or expanded transaction detail from the **Review** tab, if available |

@@ -1,0 +1,64 @@
+---
+title: "Manage case auditors"
+description: "How administrators add and remove auditors on an active investigation case."
+---
+
+Application administrators manage case-level auditor access after a case is approved. Case auditors control who appears in the worklist and can open the case workspace.
+
+## Prerequisites
+
+- Access to an **Application** workspace
+- An open approved case
+- **Case governance — Edit case auditors** (`cases:edit`) for add and remove controls
+- **Reports and logs — View transactions** (`reports:view_transactions`) to view the **Case Auditors** tab
+
+## Workflow
+
+<Steps>
+  <Step title="Open the case workspace">
+    From **Case Review**, open an approved case assigned to you or visible in your administrator view.
+  </Step>
+  <Step title="Open Case Auditors tab">
+    Click the **Case Auditors** tab in the case workspace header.
+  </Step>
+  <Step title="Add an auditor">
+    Click **Add auditor**. Select a team member from the assignable auditors picker and confirm the add action.
+  </Step>
+  <Step title="Remove an auditor">
+    On an existing row, use the remove action. Confirm if the UI presents a confirmation step.
+  </Step>
+</Steps>
+
+## Case Auditors table
+
+The table shows:
+
+| Column | Description |
+| --- | --- |
+| Auditor | Name |
+| Email | Team member email |
+| Assigned | Assignment date |
+| Last Activity | Last platform activity for this assignment |
+| Status | Active or removed state |
+
+Removed assignments remain visible as historical records. Active queries filter out soft-deleted rows.
+
+## Relationship to team access
+
+Organization **Team** settings grant application-level permission buckets. Case auditor assignments further restrict which approved cases a user can open.
+
+A user may have **Reports and logs — View transactions** (`reports:view_transactions`) on an application but still see only cases they are assigned to in the worklist.
+
+## Screenshots to capture
+
+<Note>
+Add the following screenshots when documenting this workflow. Use the exact navigation labels and button names shown.
+</Note>
+
+| # | Screen | What to capture |
+| --- | --- | --- |
+| 1 | Case workspace | **Case Auditors** tab selected |
+| 2 | Auditors table | Columns: Auditor, Email, Assigned, Last Activity, Status |
+| 3 | Add dialog | **Add auditor** button and assignable auditor picker |
+| 4 | Before confirm | Selected assignable auditor before confirming add |
+| 5 | Remove action | Existing auditor row with remove action and confirmation state, if shown |

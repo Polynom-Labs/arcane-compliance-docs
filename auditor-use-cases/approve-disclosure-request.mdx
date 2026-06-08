@@ -1,0 +1,60 @@
+---
+title: "Approve a disclosure request"
+description: "How application administrators review and approve or reject disclosure case requests."
+---
+
+Application administrators approve or reject disclosure case requests submitted by auditors. Approval activates scoped access for the requested period, disclosure fields, and assigned auditors.
+
+## Prerequisites
+
+- Access to an **Application** workspace
+- **Case governance — Approve case creation** (`cases:approve_creation`)
+
+## Workflow
+
+<Steps>
+  <Step title="Open Disclosure Requests">
+    Sign in and select your application workspace. In the sidebar, click **Disclosure Requests**.
+  </Step>
+  <Step title="Review pending requests">
+    Open the **Pending** list. Each row shows the basis type on line 1 and the case id with reason on line 2.
+  </Step>
+  <Step title="Open request details">
+    Click a pending row to open the detail dialog. Review **Request summary**, **Scope**, and **Requested access**.
+  </Step>
+  <Step title="Approve or reject">
+    Click **Approve** to create an active case with the requested scope, or **Reject** to close the request without granting access.
+  </Step>
+</Steps>
+
+## Request statuses
+
+| Status | Meaning |
+| --- | --- |
+| `pending` | Awaiting administrator action |
+| `approved` | Case created; assigned auditors can access scoped data |
+| `closed` | Request rejected or otherwise closed without active access |
+
+## Approval effects
+
+When you approve a request:
+
+- An approved investigation case is created for the application
+- Case-level auditor assignments are copied from the request
+- Assigned auditors can open the case in **Case Review** and access transactions within the approved scope and period
+
+Multi-approval configurations may require additional approvers before the case becomes active. The UI indicates when more approvals are required.
+
+## Screenshots to capture
+
+<Note>
+Add the following screenshots when documenting this workflow. Use the exact navigation labels and button names shown.
+</Note>
+
+| # | Screen | What to capture |
+| --- | --- | --- |
+| 1 | Application sidebar | **Disclosure Requests** navigation item selected |
+| 2 | Pending list | **Pending** tab with at least one request row |
+| 3 | Detail dialog | **Request summary**, **Scope**, and **Requested access** sections |
+| 4 | Dialog footer | **Reject** and **Approve** buttons visible |
+| 5 | Approved state | Request row or detail after clicking **Approve** |

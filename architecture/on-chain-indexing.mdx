@@ -1,0 +1,70 @@
+---
+title: "On-chain indexing"
+description: "How RPC indexers ingest raw blockchain data into encrypted audit records."
+---
+
+On-chain modules are chain-specific indexers configured for one or more networks. They read raw blockchain data, extract privacy-pool-related events, and persist encrypted audit rows. This page covers ingestion only; interpretation is the next stage.
+
+## Indexer responsibilities
+
+Each RPC indexer:
+
+1. Connects to a blockchain node or external indexer service
+2. Tracks scan progress with cursors and ledger ranges
+3. Extracts Soroban events, transaction metadata, and invoke calldata
+4. Persists raw audit rows and updates scan state
+
+One audit system can register multiple indexers for multiple chains. `ScannerModule` dynamically registers one Stellar RPC scanner and one Solana indexer client per configured chain name.
+
+## Stellar flow
+
+The Stellar ledger scanner:
+
+1. Runs on a scheduled tick via `LedgerScannerSchedulerService`
+2. Calls RPC `getLedgers` (paginated, limit 200) — not legacy per-transaction polling
+3. Parses ledger `metadataXdr` close meta (v0–v4)
+4. Enumerates transaction processing phases (not only classical v0 components)
+5. Derives Soroban contract events and invoke calldata (including privacy-pools `transact` decoding)
+6. Maps events to `audit` upserts and advances `stellar_scans` cursors
+
+## Solana / confidential transfer flow
+
+For Solana chains, a separate indexer client ingests confidential transfer (CT) events. The same audit table stores CT event types alongside Stellar private pool events. The interpretation runner routes rows to the appropriate pipeline.
+
+## Stored audit row
+
+Each ingested event becomes an `audit` table row:
+
+| Field | Description |
+| --- | --- |
+| `contract_id` | Registered contract FK |
+| `tx_id` | Transaction hash |
+| `soroban_event_id` | Unique event identifier |
+| `event_type` | Enum (`deposit`, `withdraw`, `transact`, `ct_*`, etc.) |
+| `cyphertext` | Encrypted audit payload (bytea) |
+| `signer_account` | Transaction signer |
+| `public_signals_json` | Public proof signals when applicable |
+| `interpreted` | Whether interpretation has completed |
+
+Unique constraint: `(contract_id, soroban_event_id)`.
+
+## Scaling model
+
+```
+                    ┌─────────────────┐
+                    │  Audit backend  │
+                    └────────┬────────┘
+                             │
+           ┌─────────────────┼─────────────────┐
+           ▼                 ▼                 ▼
+   Stellar scanner A   Stellar scanner B   Solana indexer
+           │                 │                 │
+           ▼                 ▼                 ▼
+     Stellar testnet    Stellar mainnet    Solana devnet
+```
+
+Configure chain names and RPC URLs through environment variables and the `chains` table. Contract registrations link org-scoped applications to the contracts each scanner watches.
+
+## Next stage
+
+After ingestion, rows remain encrypted and chain-specific. The [Audit events and interpretation](/architecture/audit-events-and-interpretation) pipeline decrypts payloads and produces normalized interpretation records for disclosure workflows.

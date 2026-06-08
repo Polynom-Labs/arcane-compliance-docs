@@ -1,0 +1,88 @@
+---
+title: "Generate reports and activity logs"
+description: "How to generate case reports, download exports, and review audit activity logs."
+---
+
+Auditors and administrators generate reports and review activity logs at case, application, and organization scope. Required permissions depend on the action and scope. Permission labels match the team access invite and member edit form.
+
+## Permissions by action
+
+| Action | Group | Permission | Key |
+| --- | --- | --- | --- |
+| Generate case report | Reports and logs | Create application reports | `reports:create` |
+| List application reports | Reports and logs | List application reports | `reports:list` |
+| List organization reports | Reports and logs | List organization reports | `reports:list` |
+| Download application reports | Reports and logs | Download application reports | `reports:download` |
+| Download organization reports | Reports and logs | Download organization reports | `reports:download` |
+| View application activity log | Common access | View activity log | `logs:view_activity` |
+| View organization activity log | Organization ownership | View organization activity log | `logs:view_activity` |
+| View case activity | Reports and logs | View transactions | `reports:view_transactions` |
+
+## Generate a case report
+
+<Steps>
+  <Step title="Open the case">
+    From **Case Review**, open an approved assigned case.
+  </Step>
+  <Step title="Open Reports tab">
+    Click the **Reports** tab in the case workspace.
+  </Step>
+  <Step title="Generate report">
+    Click **Generate report**. Select report type (for example **Transaction Summary**) and confirm scope/period fields in the dialog.
+  </Step>
+  <Step title="Download">
+    After generation completes, use **Download** on the report row in the list.
+  </Step>
+</Steps>
+
+Case report generation creates a CSV **Transaction Summary** from transactions filtered to the case boundary and period.
+
+## View workspace reports
+
+Application and organization workspaces expose a **Reports** nav item for listing existing reports. These pages do not include a generate action — generation stays on the case **Reports** tab.
+
+Report list columns include Report, Boundary, Period, Created, Format, and Action.
+
+Report boundaries:
+
+| Boundary | Description |
+| --- | --- |
+| Organization | Org-wide export |
+| Application | Single application scope |
+| Case | Single investigation case |
+
+## Review activity logs
+
+### Application or organization scope
+
+1. In the application or organization sidebar, click **Audit Log**
+2. Use filters to narrow by date, actor, or event type
+3. Review Object/Details columns (application scope) or Target column (organization scope)
+
+Application scope requires **Common access — View activity log** (`logs:view_activity`). Organization scope requires **Organization ownership — View organization activity log** (`logs:view_activity`).
+
+### Case scope
+
+1. Open a case workspace
+2. Click the **Activity** tab
+3. Review case-scoped audit log entries
+
+The **Activity** tab requires **Reports and logs — View transactions** (`reports:view_transactions`).
+
+Activity log entries use typed `object` and `details` JSON payloads. The backend writes entries only after successful handler responses.
+
+## Screenshots to capture
+
+<Note>
+Add the following screenshots when documenting this workflow. Use the exact navigation labels and button names shown.
+</Note>
+
+| # | Screen | What to capture |
+| --- | --- | --- |
+| 1 | Case workspace | **Reports** tab selected |
+| 2 | Reports panel | **Generate report** button visible |
+| 3 | Generate dialog | Report type and scope/period fields after clicking **Generate report** |
+| 4 | Report list | Generated report row with **Download** action |
+| 5 | Application sidebar | **Reports** nav item and workspace reports table |
+| 6 | Application sidebar | **Audit Log** nav item with filters and activity table |
+| 7 | Case workspace | **Activity** tab with case-scoped entries |
