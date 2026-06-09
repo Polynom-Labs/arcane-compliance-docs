@@ -7,46 +7,7 @@ The Stellar privacy pool is implemented by the Soroban contract, Circom circuits
 
 ## Privacy Pool components
 
-```mermaid
-flowchart LR
-  app["Reference or partner application"]
-  wallet["Stellar wallet"]
-  sdk["PrivacyPoolSDK"]
-
-  subgraph sdkParts["SDK responsibilities"]
-    stealth["Stealth address helpers"]
-    coin["Coin construction"]
-    witness["Merkle witness preparation"]
-    proof["Groth16 proof generation"]
-    serialization["Soroban serialization"]
-  end
-
-  subgraph contract["PrivacyPoolsContract"]
-    entry["transact(from, proof_bytes, pub_signals_bytes, encoded)"]
-    verifier["Groth16 verifier"]
-    roots["Root history"]
-    nullifiers["Consumed nullifier hashes"]
-    commitments["Commitment tree and leaf ephemeral keys"]
-    tokens["Public deposit and withdrawal token transfers"]
-    event["AuditEncodedDigest"]
-  end
-
-  app --> sdk
-  app --> wallet
-  sdk --> stealth
-  sdk --> coin
-  sdk --> witness
-  sdk --> proof
-  sdk --> serialization
-  wallet --> entry
-  serialization --> entry
-  entry --> verifier
-  entry --> roots
-  entry --> nullifiers
-  entry --> commitments
-  entry --> tokens
-  entry --> event
-```
+![Privacy Pool components](/images/diagrams/privacy-pool-components.svg)
 
 ## Runtime responsibilities
 

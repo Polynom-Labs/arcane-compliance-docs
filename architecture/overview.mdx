@@ -31,30 +31,12 @@ The Stellar/Soroban path is the current privacy-pool implementation covered by t
 
 ## Runtime summary
 
-```mermaid
-flowchart LR
-  app["Reference or partner application"]
-  sdk["PrivacyPoolSDK"]
-  wallet["Stellar wallet"]
-  contract["PrivacyPoolsContract.transact"]
-  event["AuditEncodedDigest"]
-  scanner["ScannerModule and Stellar RPC client"]
-  audit["audit"]
-  interpretation["audit_interpretation"]
-  workflow["Cases, reports, auditors_log"]
-  ui["Audit UI"]
-
-  app --> sdk
-  app --> wallet
-  sdk --> contract
-  wallet --> contract
-  contract --> event
-  event --> scanner
-  scanner --> audit
-  audit --> interpretation
-  interpretation --> workflow
-  workflow --> ui
-```
+| Path | Sequence |
+| --- | --- |
+| Private transaction execution | Application -> SDK -> wallet -> `PrivacyPoolsContract.transact` |
+| Audit event handoff | `PrivacyPoolsContract.transact` -> `AuditEncodedDigest` -> Stellar RPC |
+| Indexing and interpretation | Stellar RPC -> scanner -> `audit` -> interpretation worker -> `audit_interpretation` |
+| Portal review | Audit UI -> backend API -> scoped cases, reports, and `auditors_log` |
 
 ## Boundaries
 

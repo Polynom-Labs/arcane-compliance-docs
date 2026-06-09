@@ -7,67 +7,9 @@ This page shows runtime components and their main data paths.
 
 ## Runtime components
 
-```mermaid
-flowchart LR
-  subgraph external["External application boundary"]
-    app["Reference or partner application"]
-    wallet["Stellar wallet"]
-    sdk["PrivacyPoolSDK\n@auditable/privacy-pool-zk-sdk"]
-    app --> sdk
-    app --> wallet
-  end
+![Arcane architecture map](/images/diagrams/architecture-map.svg)
 
-  subgraph soroban["Stellar / Soroban"]
-    contract["PrivacyPoolsContract.transact"]
-    state["Contract storage\ncommitments, nullifiers, roots, ephemeral keys"]
-    event["AuditEncodedDigest\nmessage_name=transact, digest=encoded"]
-    contract --> state
-    contract --> event
-  end
-
-  rpc["Stellar RPC"]
-  identity["Identity provider"]
-
-  subgraph backend["Arcane backend"]
-    api["NestJS API controllers and guards"]
-    auth["AuthModule\nWorkosAuthModule\nMagicAuthModule"]
-    registry["ApplicationsModule\nContractsModule\nAssetsModule"]
-    scanner["ScannerModule\nStellarLedgerScannerService"]
-    interpreter["AuditInterpretationRunnerService"]
-    workflow["CasesModule\nReportsModule\nAuditorsLogModule"]
-  end
-
-  subgraph postgres["PostgreSQL"]
-    registryDb["chain\ncontracts\nassets\napplications"]
-    auditDb["stellar_scans\naudit\naudit_chain\naudit_interpretation"]
-    accessDb["organisations\nteam_member_meta\nteam_member_application_permissions"]
-    workflowDb["disclosure_requests\ncase_requests\ncases\nreports\nauditors_log"]
-  end
-
-  subgraph ui["Arcane Audit UI"]
-    orgUi["Organization owner workspace"]
-    appUi["Application workspace\n/workspace/application/:foreignId"]
-  end
-
-  sdk --> contract
-  wallet --> contract
-  event --> rpc
-  rpc --> scanner
-  registryDb --> scanner
-  scanner --> auditDb
-  auditDb --> interpreter
-  interpreter --> auditDb
-  identity --> auth
-  auth --> accessDb
-  registry --> registryDb
-  workflow --> workflowDb
-  api --> registryDb
-  api --> auditDb
-  api --> accessDb
-  api --> workflowDb
-  orgUi --> api
-  appUi --> api
-```
+The diagram shows the primary runtime path only. Internal backend module responsibilities and table groups are listed below instead of adding every dependency as another arrow.
 
 ## Runtime responsibilities
 

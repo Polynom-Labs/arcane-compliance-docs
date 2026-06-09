@@ -7,56 +7,7 @@ The Auditing Portal is the off-chain part of Arcane. It indexes registered contr
 
 ## Auditing Portal components
 
-```mermaid
-flowchart LR
-  rpc["Stellar RPC"]
-  identity["Identity provider"]
-
-  subgraph backend["NestJS backend"]
-    auth["AuthModule\nWorkosAuthModule\nMagicAuthModule"]
-    registry["ApplicationsModule\nContractsModule\nAssetsModule"]
-    scanner["ScannerModule\nStellarLedgerScannerService"]
-    interpreter["AuditInterpretationRunnerService"]
-    auditApi["AuditModule"]
-    cases["CasesModule\nDisclosureRequestModule"]
-    reports["ReportsModule"]
-    log["AuditorsLogModule"]
-    admins["AdminsModule"]
-  end
-
-  subgraph db["PostgreSQL"]
-    registryDb["chain, contracts, assets, applications"]
-    auditDb["stellar_scans, audit, audit_chain, audit_interpretation"]
-    accessDb["organisations, team_member_meta, team_member_application_permissions"]
-    workflowDb["disclosure_requests, case_requests, cases, reports, auditors_log"]
-  end
-
-  subgraph ui["Audit UI"]
-    orgUi["Organization owner workspace"]
-    appUi["Application workspace\n/workspace/application/:foreignId"]
-  end
-
-  rpc --> scanner
-  identity --> auth
-  registry --> registryDb
-  registryDb --> scanner
-  scanner --> auditDb
-  auditDb --> interpreter
-  interpreter --> auditDb
-  auth --> accessDb
-  admins --> accessDb
-  auditApi --> auditDb
-  cases --> workflowDb
-  reports --> workflowDb
-  log --> workflowDb
-  orgUi --> auth
-  appUi --> auth
-  orgUi --> admins
-  appUi --> auditApi
-  appUi --> cases
-  appUi --> reports
-  appUi --> log
-```
+![Auditing Portal components](/images/diagrams/auditing-portal-components.svg)
 
 ## Runtime responsibilities
 

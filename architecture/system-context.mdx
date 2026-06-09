@@ -7,37 +7,7 @@ This page shows the systems and actors around Arcane. It deliberately does not s
 
 ## System context
 
-```mermaid
-flowchart LR
-  integrator["Privacy-pool integrator\nReference or partner application team"]
-  endUser["End user\nStellar wallet holder"]
-  auditor["Auditor"]
-  appAdmin["Application administrator"]
-  orgAdmin["Organization administrator"]
-
-  app["Reference or partner application"]
-  wallet["Stellar wallet"]
-
-  subgraph stellar["Stellar / Soroban"]
-    contract["Arcane Soroban privacy-pool contract"]
-    ledger["Stellar ledger and Soroban events"]
-  end
-
-  portal["Arcane Auditing Portal"]
-  identity["Identity provider"]
-
-  integrator --> app
-  endUser --> app
-  endUser --> wallet
-  app --> wallet
-  wallet --> contract
-  contract --> ledger
-  ledger --> portal
-  auditor --> portal
-  appAdmin --> portal
-  orgAdmin --> portal
-  identity --> portal
-```
+![Arcane system context](/images/diagrams/system-context.svg)
 
 ## Actors
 
