@@ -1,9 +1,9 @@
 ---
-title: "Request a Disclosure Case"
-description: "How auditors request scoped access to private transaction data through a case request."
+title: "Create a Disclosure Request"
+description: "How auditors create a disclosure request for scoped access to interpreted private-pool transaction data."
 ---
 
-Auditors create disclosure case requests when they need access to private transaction data for an investigation. The request stays pending until an application administrator approves or closes it.
+Auditors create disclosure requests when they need scoped access to interpreted private-pool transaction data for an investigation. A request is not an active case yet. The active `cases` row is created only after an application administrator approves the request.
 
 ## Prerequisites
 
@@ -17,22 +17,43 @@ Auditors create disclosure case requests when they need access to private transa
   <Step title="Open Case Review">
     Sign in and select the application workspace. In the sidebar, click **Case Review**.
   </Step>
-  <Step title="Create case">
-    Click **Create case** to open the case request form.
+  <Step title="Open the new request form">
+    Use the create action in **Case Review** to open the disclosure request form.
   </Step>
   <Step title="Fill request summary">
-    Enter the investigation basis and reason. Choose the scope period and access window.
+    Enter the investigation basis and reason. Choose the transaction period and requested access window.
   </Step>
   <Step title="Choose disclosure scope">
-    Select the disclosure fields requested for the case: transaction identifiers, sender information, and recipient/withdrawal information.
+    Select the fields requested for disclosure: transaction identifiers, sender information, and recipient/withdrawal information.
   </Step>
   <Step title="Assign auditors">
     Select team members who should access the case if approved. The session user is auto-selected when present in the assignable list.
   </Step>
   <Step title="Submit request">
-    Submit the request. The case appears in the pending queue until an application administrator approves or closes it.
+    Submit the request. It appears in the pending queue until an application administrator approves or closes it.
   </Step>
 </Steps>
+
+## Request-to-case boundary
+
+```mermaid
+flowchart LR
+  form["Disclosure request form"]
+  disclosure["disclosure_requests\nstatus=pending"]
+  caseReq["case_requests\nperiod, access window, disclosure flags"]
+  assignments["case_request_auditor_assignments"]
+  decision["Application administrator decision"]
+  activeCase["cases\ncreated only after approval"]
+  caseAssignments["case_auditor_assignments"]
+
+  form --> disclosure
+  disclosure --> caseReq
+  caseReq --> assignments
+  disclosure --> decision
+  decision --> activeCase
+  assignments --> caseAssignments
+  activeCase --> caseAssignments
+```
 
 ## Backend writes
 

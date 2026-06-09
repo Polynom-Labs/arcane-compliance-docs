@@ -15,7 +15,7 @@ sequenceDiagram
   participant DB as PostgreSQL
   participant Log as AuditorsLogModule
 
-  Auditor->>Cases: Create case request
+  Auditor->>Cases: Create disclosure request
   Cases->>DB: Insert disclosure_requests(status=pending)
   Cases->>DB: Insert case_requests
   Cases->>DB: Insert case_request_auditor_assignments

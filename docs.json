@@ -54,7 +54,7 @@
             "group": "Auditor",
             "pages": [
               "use-cases/auditor/overview",
-              "use-cases/auditor/request-disclosure-case",
+              "use-cases/auditor/create-disclosure-request",
               "use-cases/auditor/review-case-transactions",
               "use-cases/auditor/generate-reports-and-activity-logs"
             ]
