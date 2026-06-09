@@ -1,9 +1,9 @@
 ---
-title: "Identity and access"
+title: "Identity and Access"
 description: "Identity implementation, auth-me response, permission buckets, route scope, and API enforcement."
 ---
 
-Identity and access control who can enter the Audit UI and which organization, application, case, report, transaction, and activity-log data they can access.
+Identity and access control which organization, application, case, report, transaction, and activity-log data a portal user can access.
 
 The codebase implements enterprise identity with WorkOS modules and email OTP with Magic Auth. The architecture boundary is the authenticated session and the `GET /auth/me` permission response consumed by the Audit UI and API guards.
 
@@ -38,8 +38,6 @@ Session identity is mapped to:
 ## `GET /auth/me`
 
 `GET /auth/me` returns the organization, owner permissions, and application permission buckets for the current session.
-
-Example shape:
 
 ```json
 {
@@ -116,26 +114,6 @@ Application permissions are stored as three arrays on `team_member_application_p
 | Download application reports | `reports:download` |
 
 Default role buckets are defined in `permissions.constants.ts`. Organization owners can adjust access through team-management flows.
-
-## UI permission mapping
-
-Application workspace navigation:
-
-| Nav item | Required permission |
-| --- | --- |
-| Case Review | `reports:view_transactions` |
-| Disclosure Requests | `cases:approve_creation` |
-| Reports | `reports:list` |
-| Audit Log | `logs:view_activity` |
-
-Case workspace tabs:
-
-| Tab | Required permission |
-| --- | --- |
-| Review | `reports:view_transactions` |
-| Case Auditors | `reports:view_transactions` |
-| Activity | `reports:view_transactions` |
-| Reports | `reports:list` |
 
 ## API enforcement path
 

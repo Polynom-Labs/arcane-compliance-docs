@@ -1,0 +1,94 @@
+---
+title: "Architecture Map"
+description: "C4 C2 container view for the Stellar/Soroban privacy-pool and auditing-portal implementation."
+---
+
+This C4 C2 view shows the deployable/runtime containers and their main data paths.
+
+## C2: Containers
+
+```mermaid
+flowchart LR
+  subgraph external["External application boundary"]
+    app["Reference or partner application"]
+    wallet["Stellar wallet"]
+    sdk["PrivacyPoolSDK\n@auditable/privacy-pool-zk-sdk"]
+    app --> sdk
+    app --> wallet
+  end
+
+  subgraph soroban["Stellar / Soroban"]
+    contract["PrivacyPoolsContract.transact"]
+    state["Contract storage\ncommitments, nullifiers, roots, ephemeral keys"]
+    event["AuditEncodedDigest\nmessage_name=transact, digest=encoded"]
+    contract --> state
+    contract --> event
+  end
+
+  rpc["Stellar RPC"]
+  identity["Identity provider"]
+
+  subgraph backend["Arcane backend"]
+    api["NestJS API controllers and guards"]
+    auth["AuthModule\nWorkosAuthModule\nMagicAuthModule"]
+    registry["ApplicationsModule\nContractsModule\nAssetsModule"]
+    scanner["ScannerModule\nStellarLedgerScannerService"]
+    interpreter["AuditInterpretationRunnerService"]
+    workflow["CasesModule\nReportsModule\nAuditorsLogModule"]
+  end
+
+  subgraph postgres["PostgreSQL"]
+    registryDb["chain\ncontracts\nassets\napplications"]
+    auditDb["stellar_scans\naudit\naudit_chain\naudit_interpretation"]
+    accessDb["organisations\nteam_member_meta\nteam_member_application_permissions"]
+    workflowDb["disclosure_requests\ncase_requests\ncases\nreports\nauditors_log"]
+  end
+
+  subgraph ui["Arcane Audit UI"]
+    orgUi["Organization owner workspace"]
+    appUi["Application workspace\n/workspace/application/:foreignId"]
+  end
+
+  sdk --> contract
+  wallet --> contract
+  event --> rpc
+  rpc --> scanner
+  registryDb --> scanner
+  scanner --> auditDb
+  auditDb --> interpreter
+  interpreter --> auditDb
+  identity --> auth
+  auth --> accessDb
+  registry --> registryDb
+  workflow --> workflowDb
+  api --> registryDb
+  api --> auditDb
+  api --> accessDb
+  api --> workflowDb
+  orgUi --> api
+  appUi --> api
+```
+
+## Container responsibilities
+
+| Container | Implementation | Responsibility |
+| --- | --- | --- |
+| Reference or partner application | Integrator application | End-user UI, wallet connection, SDK calls, Soroban transaction submission |
+| `PrivacyPoolSDK` | `stellar-privacy-layer-contracts/client-sdk` | Coin construction, stealth address helpers, witness construction, proof generation, Soroban serialization |
+| Stellar wallet | Wallet integration | Message signing and Soroban transaction signing |
+| Soroban contract | `stellar-privacy-layer-contracts/contract/src/lib.rs` | `transact`, proof verification, nullifier checks, commitment state, token transfers, audit event emission |
+| Stellar RPC | Configured `chain.rpc_url` | Ledger and event source for registered contract scanning |
+| Backend API | NestJS controllers and guards | Authenticated API routes for applications, audit rows, cases, reports, logs, team/admin actions |
+| Scanner | `ScannerModule`, `StellarLedgerScannerService` | Ledger range scanning, Soroban event parsing, raw `audit` upsert, `stellar_scans` checkpoint update |
+| Interpretation worker | `AuditInterpretationRunnerService` | Decrypt raw audit rows and write normalized `audit_interpretation` records |
+| PostgreSQL | TypeORM entities and migrations | Registry, audit, interpretation, access, workflow, report, and activity-log data |
+| Audit UI | React/Vite application | Organization and application workspaces backed by `GET /auth/me` and scoped API routes |
+
+## Primary paths
+
+| Path | Sequence |
+| --- | --- |
+| Private transaction execution | Application -> SDK -> wallet -> `PrivacyPoolsContract.transact` -> contract state + `AuditEncodedDigest` |
+| Indexing and interpretation | `AuditEncodedDigest` -> Stellar RPC -> scanner -> `audit` -> interpretation worker -> `audit_interpretation` |
+| Portal access | Audit UI -> identity flow -> `GET /auth/me` -> permission buckets -> guarded API routes |
+| Disclosure workflow | Case request -> administrator decision -> approved case -> assigned auditor review -> report/activity log |

@@ -1,9 +1,35 @@
 ---
-title: "Disclosure, cases, and reports"
+title: "Disclosure, Cases, and Reports"
 description: "Disclosure request storage, approved cases, auditor assignments, reports, and activity logs."
 ---
 
 Disclosure workflows give authorized users scoped access to interpreted audit data. The scope is stored in disclosure and case tables, enforced by API guards and queries, and recorded in `auditors_log`.
+
+## Lifecycle
+
+```mermaid
+sequenceDiagram
+  participant Auditor as Auditor
+  participant Cases as Cases API
+  participant Admin as Application administrator
+  participant DB as PostgreSQL
+  participant Log as AuditorsLogModule
+
+  Auditor->>Cases: Create case request
+  Cases->>DB: Insert disclosure_requests(status=pending)
+  Cases->>DB: Insert case_requests
+  Cases->>DB: Insert case_request_auditor_assignments
+  Cases->>Log: Stage request-created event
+  Admin->>Cases: Approve or close request
+  Cases->>DB: Insert request_decisions
+  Cases->>DB: If approved, insert cases
+  Cases->>DB: Copy request assignments to case_auditor_assignments
+  Cases->>Log: Stage decision event
+```
+
+Supported status values are `pending`, `approved`, and `closed`.
+
+Auditors can withdraw pending requests they created when they have `cases:withdraw_pending_request`. Application administrators can approve or close pending requests when they have `cases:approve_creation`.
 
 ## Data model
 
@@ -43,85 +69,6 @@ flowchart LR
 | `case_auditor_assignments` | Active case auditor assignments; removed assignments are soft-deleted |
 | `reports` | Generated report files and metadata |
 | `auditors_log` | Activity trail for request, decision, case, report, team, and application actions |
-
-## Lifecycle
-
-```mermaid
-sequenceDiagram
-  participant Auditor as Auditor
-  participant Cases as Cases API
-  participant Admin as Administrator
-  participant DB as PostgreSQL
-  participant Log as AuditorsLogModule
-
-  Auditor->>Cases: Create case request
-  Cases->>DB: Insert disclosure_requests(status=pending)
-  Cases->>DB: Insert case_requests
-  Cases->>DB: Insert case_request_auditor_assignments
-  Cases->>Log: Stage request-created event
-  Admin->>Cases: Approve or close request
-  Cases->>DB: Insert request_decisions
-  Cases->>DB: If approved, insert cases
-  Cases->>DB: Copy request assignments to case_auditor_assignments
-  Cases->>Log: Stage decision event
-```
-
-Supported status values are `pending`, `approved`, and `closed`.
-
-Auditors can withdraw pending requests they created when they have `cases:withdraw_pending_request`. Administrators can approve or close pending requests when they have `cases:approve_creation`.
-
-## Disclosure request fields
-
-`disclosure_requests` stores the request boundary:
-
-| Field | Meaning |
-| --- | --- |
-| `org_id` | Organization scope |
-| `application_id` | Application scope |
-| `requester_user_id` | User who created the request |
-| `reason` | Human-readable request reason |
-| `status` | `pending`, `approved`, or `closed` |
-| `type` | Request type |
-| `approvals_required` | Number of required approvals |
-
-`case_requests` stores case-specific scope:
-
-| Field | Meaning |
-| --- | --- |
-| `basis_key` | Investigation basis |
-| `period_from`, `period_to` | Approved transaction period |
-| `access_days` | Access window after approval |
-| `full_tx_ids` | Permit full transaction identifiers |
-| `sender_information` | Permit sender-side fields |
-| `withdrawal_details` | Permit recipient/withdrawal-side fields |
-| `future_case_id` | Case id to create after approval |
-| `is_withdrawn` | Pending request was withdrawn |
-| `investigation_contract_addresses` | Optional contract address filters |
-
-## Approved cases
-
-An approved request creates a `cases` row.
-
-| Field | Meaning |
-| --- | --- |
-| `id` | Case id shown in case routes |
-| `case_request_id` | Source disclosure request id |
-| `contract_addresses` | Contract filter copied to the case |
-| `access_days` | Active case access duration |
-| `created_at` | Approval-time creation timestamp |
-
-Active case access is time-bound by `created_at + access_days`.
-
-## Auditor assignments
-
-There are two assignment stages:
-
-| Stage | Table | Usage |
-| --- | --- | --- |
-| Request-time | `case_request_auditor_assignments` | Proposed auditors before approval |
-| Active case | `case_auditor_assignments` | Auditors who can access an approved case |
-
-`case_auditor_assignments.deleted_at` preserves removal history while excluding removed assignments from active case access.
 
 ## Main endpoints
 

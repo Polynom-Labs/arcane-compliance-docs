@@ -14,15 +14,31 @@
         "group": "Architecture",
         "pages": [
           "architecture/overview",
-          "architecture/core-components",
-          "architecture/data-and-access-flows",
-          "architecture/reference-applications",
-          "architecture/cryptography",
-          "architecture/audit-system",
-          "architecture/identity-and-access",
-          "architecture/on-chain-indexing",
-          "architecture/audit-events-and-interpretation",
-          "architecture/disclosure-cases-and-reports"
+          "architecture/system-context",
+          "architecture/architecture-map"
+        ]
+      },
+      {
+        "group": "Privacy Pools",
+        "pages": [
+          "privacy-pools/overview",
+          "privacy-pools/soroban-contract",
+          "privacy-pools/cryptography",
+          "privacy-pools/client-sdk",
+          "privacy-pools/on-chain-state",
+          "privacy-pools/audit-events"
+        ]
+      },
+      {
+        "group": "Auditing Portal",
+        "pages": [
+          "auditing-portal/overview",
+          "auditing-portal/backend-architecture",
+          "auditing-portal/data-model",
+          "auditing-portal/indexing-and-interpretation",
+          "auditing-portal/identity-and-access",
+          "auditing-portal/disclosure-cases-and-reports",
+          "auditing-portal/audit-ui"
         ]
       },
       {
@@ -32,13 +48,32 @@
         ]
       },
       {
-        "group": "Auditor use cases",
+        "group": "Use Cases",
         "pages": [
-          "auditor-use-cases/request-disclosure-case",
-          "auditor-use-cases/approve-disclosure-request",
-          "auditor-use-cases/review-case-transactions",
-          "auditor-use-cases/manage-case-auditors",
-          "auditor-use-cases/generate-reports-and-activity-logs"
+          {
+            "group": "Auditor",
+            "pages": [
+              "use-cases/auditor/overview",
+              "use-cases/auditor/request-disclosure-case",
+              "use-cases/auditor/review-case-transactions",
+              "use-cases/auditor/generate-reports-and-activity-logs"
+            ]
+          },
+          {
+            "group": "Application Administrator",
+            "pages": [
+              "use-cases/application-administrator/overview",
+              "use-cases/application-administrator/approve-disclosure-request",
+              "use-cases/application-administrator/manage-case-auditors",
+              "use-cases/application-administrator/application-reports-and-activity-logs"
+            ]
+          },
+          {
+            "group": "Organization Administrator",
+            "pages": [
+              "use-cases/organization-administrator/overview"
+            ]
+          }
         ]
       }
     ]
