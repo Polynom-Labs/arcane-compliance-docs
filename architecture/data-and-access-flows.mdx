@@ -1,134 +1,194 @@
 ---
 title: "Data and access flows"
-description: "End-to-end private transfer, indexing, interpretation, disclosure, review, and reporting flows."
+description: "Stellar privacy-pool transaction, indexing, interpretation, disclosure, review, and reporting flows."
 ---
 
-Arcane separates end-user transfer execution, chain ingestion, backend interpretation, human disclosure workflows, and report generation.
+Arcane separates private transaction execution from audit indexing and human disclosure. End users interact with the external application and Soroban contract. Auditors and administrators interact with the Audit UI and API after indexed events are interpreted and scoped by permissions.
 
-## Private transfer flow
-
-1. A user opens a reference application or partner application.
-2. The application connects to the user's wallet.
-3. The application uses the SDK to prepare a privacy-pool operation.
-4. The wallet signs and submits the transaction.
-5. The Soroban privacy-pool contract verifies the proof.
-6. The contract updates pool state: commitments, nullifiers, roots, or related state.
-7. The contract emits audit-relevant events or payload digests.
-8. The user transfer completes without going through the Audit UI or disclosure workflow.
-
-## Indexing flow
-
-1. The indexer reads configured ledgers through a Stellar RPC provider.
-2. The indexer filters events from registered Soroban privacy-pool contracts.
-3. The parser extracts event type, contract reference, transaction reference, and encrypted audit payload or digest.
-4. The indexer writes raw encrypted audit rows to PostgreSQL.
-5. The indexer updates checkpoints so scanning can resume safely.
-6. Failed reads or parse errors are retried or marked for investigation.
+## Private transaction flow
 
 ```mermaid
 sequenceDiagram
-  participant C as Soroban contract
-  participant R as Stellar RPC
-  participant I as Arcane indexer
+  participant App as External app
+  participant SDK as PrivacyPoolSDK
+  participant Wallet as Stellar wallet
+  participant Contract as PrivacyPoolsContract
+  participant Chain as Stellar ledger
+
+  App->>SDK: Build coin/witness/proof/public signals/encoded audit bytes
+  App->>Wallet: Request Soroban transaction signing
+  Wallet->>Contract: transact(from, proof_bytes, pub_signals_bytes, encoded)
+  Contract->>Contract: require_auth(from)
+  Contract->>Contract: Check root, nullifiers, Groth16 proof
+  Contract->>Contract: Store output commitments and ephemeral keys
+  Contract->>Contract: Apply public token deposits/withdrawals
+  Contract->>Chain: Emit AuditEncodedDigest
+```
+
+`deposit`, `withdraw`, `transfer`, and mixed operations are protocol-level transaction shapes represented inside `transact` inputs. The contract does not expose separate public methods for those operation names.
+
+## Contract state update
+
+Inside `transact`, the contract updates only protocol state:
+
+| State | Storage key or getter | Purpose |
+| --- | --- | --- |
+| Commitment leaves | `TreeDataKey::Leaf(index)`, `get_commitments` | Public commitment hashes |
+| Leaf count | `TreeDataKey::LeafCount`, `get_commitment_count` | Number of stored leaves |
+| Leaf ephemeral keys | `TreeDataKey::LeafEphemeral(index)`, `get_leaf_ephemeral` | Recipient-side shared-secret recovery input |
+| Merkle root | `TREE_ROOT_KEY`, `get_merkle_root` | Current pool root |
+| Merkle frontier | `TreeDataKey::PairwiseFrontier`, `get_pairwise_frontier` | Pairwise LeanIMT insertion state |
+| Root history | `RootHistoryKey::Root(i)`, `is_known_root` | 90-root recent history for proof verification |
+| Nullifier state | `NulifierDataKey::Nulifier(hash)`, `is_nulifier_hash_consumed` | Double-spend prevention |
+
+## Stellar indexing flow
+
+```mermaid
+sequenceDiagram
+  participant Scheduler as LedgerScannerSchedulerService
+  participant Scanner as StellarLedgerScannerService
+  participant RPC as Stellar RPC
+  participant Parser as Stellar event/calldata parser
   participant DB as PostgreSQL
 
-  C->>R: Ledger closes with contract events
-  I->>R: Read configured ledger range
-  I->>I: Filter registered contracts
-  I->>I: Parse audit-relevant event data
-  I->>DB: Upsert raw encrypted audit row
-  I->>DB: Update scanner checkpoint
+  Scheduler->>Scanner: scan() on configured Stellar chain
+  Scanner->>DB: List contracts for chain_id
+  Scanner->>DB: Read last stellar_scans checkpoint
+  Scanner->>RPC: getLatestLedger(), getLedgers(range)
+  RPC-->>Scanner: Ledger metadata and event data
+  Scanner->>Parser: Filter successful events for contract address
+  Parser->>Parser: Map audit topic to transact
+  Parser->>Parser: Resolve public signals and signer from calldata
+  Parser->>DB: Upsert audit row by contract_id + soroban_event_id
+  Parser->>DB: Insert audit_chain link
+  Scanner->>DB: Upsert stellar_scans checkpoint
 ```
+
+The scanner only scans registered contracts. Registration comes from `contracts` rows linked to `chain` rows and from `applications.association.contract_id`.
+
+## Raw audit row
+
+The scanner writes one `audit` row per accepted event.
+
+| Column | Source |
+| --- | --- |
+| `contract_id` | Registered `contracts.id` |
+| `tx_id` | Stellar event transaction hash |
+| `soroban_event_id` | Stellar event id; unique with `contract_id` |
+| `event_type` | `transact` for current `AuditEncodedDigest` events |
+| `cyphertext` | Sealed audit payload from the event value |
+| `created_at` | Ledger close time |
+| `interpreted` | `false` until interpretation succeeds |
+| `signer_account` | Signer resolved from `transact` calldata, fallback `unknown` |
+| `public_signals_json` | Parsed transaction public signals |
+| `interpretation_error` | Last interpretation error, if any |
+
+The scanner also writes `audit_chain` and advances `stellar_scans`.
 
 ## Interpretation flow
 
-1. A scheduled job or worker selects raw encrypted audit rows that are ready for processing.
-2. The worker decrypts, resolves, or validates payloads according to the configured key and integration model.
-3. The worker normalizes events into disclosure-ready interpreted records.
-4. The worker writes interpreted records to PostgreSQL.
-5. The worker records interpretation status, errors, and processing metadata.
+```mermaid
+sequenceDiagram
+  participant Worker as AuditInterpretationRunnerService
+  participant DB as PostgreSQL
+  participant Stellar as Stellar interpretation pipeline
 
-Interpretation is not disclosure. Interpreted records can exist in the backend, but user access still requires permissions, approved case scope, and audit logging.
+  Worker->>DB: Lock up to 25 uninterpreted audit rows
+  Worker->>Stellar: interpretStellarAuditRow(audit)
+  Stellar->>DB: Read contract.decoding_key
+  Stellar->>Stellar: Parse public_signals_json
+  Stellar->>Stellar: decryptAndDecodeTransaction(cyphertext, decoding_key)
+  Stellar->>Stellar: planInterpretations(tx, publicSignals)
+  Stellar->>DB: Replace audit_interpretation rows
+  Stellar->>DB: Mark source audit row interpreted or store interpretation_error
+```
+
+The runner also routes Solana confidential-token audit rows to the CT interpretation pipeline. The Stellar privacy-pool path uses `interpretStellarAuditRow`.
 
 ## Authentication and permission flow
 
-1. A user opens the Audit UI.
-2. The UI authenticates the user through the enterprise identity provider.
-3. The Audit API maps the external identity to Arcane organization membership.
-4. The permission module resolves workspace access and permission buckets.
-5. The API returns only the workspaces, applications, cases, reports, and logs the user is allowed to see.
+```mermaid
+sequenceDiagram
+  participant UI as Audit UI
+  participant Auth as Auth API
+  participant DB as PostgreSQL
+  participant API as Scoped API route
+
+  UI->>Auth: GET /auth/me
+  Auth->>DB: Resolve organisation and team_member_meta
+  Auth->>DB: Load team_member_application_permissions
+  Auth-->>UI: owner bucket + applications[foreignId] buckets
+  UI->>API: Request application/case/report/log route
+  API->>API: WorkosAuthGuard + PermissionsGuard + ApplicationScopeGuard
+  API->>DB: Query scoped rows
+  API-->>UI: Allowed data only
+```
+
+`auth/me` uses `applications.foreign_id` as the key for application-scoped permissions. The UI uses the same value in `/workspace/application/:foreignId` routes.
 
 ## Disclosure request flow
 
-1. An auditor creates a disclosure request for a specific application or contract scope.
-2. The request includes reason, basis, investigation period, requested fields, access window, and assigned auditors.
-3. An application administrator or authorized approver reviews the request.
-4. If rejected, the request is closed and logged.
-5. If approved, the platform creates an active case.
-6. The case grants assigned auditors scoped access to matching interpreted records.
-7. Case access expires according to the configured access window.
-8. Request creation, approval, rejection, case access, and later changes are written to the activity log.
-
 ```mermaid
-flowchart LR
-  request["Auditor creates disclosure request"]
-  pending["Pending review"]
-  approve["Administrator approves"]
-  reject["Administrator rejects"]
-  case["Active case"]
-  review["Assigned auditor reviews scoped records"]
-  log["Activity log"]
+sequenceDiagram
+  participant Auditor as Auditor
+  participant API as Cases API
+  participant Admin as Administrator
+  participant DB as PostgreSQL
+  participant Log as AuditorsLogModule
 
-  request --> pending
-  pending --> approve --> case --> review
-  pending --> reject
-  request --> log
-  approve --> log
-  reject --> log
-  review --> log
+  Auditor->>API: Create case request for application
+  API->>DB: Insert disclosure_requests + case_requests
+  API->>DB: Insert case_request_auditor_assignments
+  API->>Log: Stage request activity
+  Admin->>API: Approve or close request
+  API->>DB: Insert request_decisions
+  API->>DB: On approve, create cases row
+  API->>DB: Copy request assignments to case_auditor_assignments
+  API->>Log: Stage decision activity
 ```
+
+`case_requests` defines the case period, access days, disclosure flags, future case id, and optional contract-address filters. `cases` is created only after approval.
 
 ## Case review flow
 
-1. An assigned auditor opens the case workspace.
-2. The Audit API verifies case assignment, application scope, permission keys, and access-window validity.
-3. The API queries interpreted records matching the approved period and disclosure scope.
-4. The UI shows only fields allowed by the case scope.
-5. The platform logs case access and relevant review actions.
+1. The assigned auditor opens `/workspace/application/:foreignId/cases/:caseId`.
+2. The API resolves `:foreignId` to internal `application_id`.
+3. Guards verify the user is authenticated and has `reports:view_transactions`.
+4. Case queries verify organization scope, application scope, active assignment, non-withdrawn request, approved case, and access window.
+5. Transaction review reads `audit_interpretation` rows matching the approved period and contract filters.
+6. Response shaping applies disclosure flags such as `full_tx_ids`, `sender_information`, and `withdrawal_details`.
+7. Access and sensitive actions are recorded in `auditors_log`.
 
 ## Report generation flow
 
-1. An authorized user requests a report for an organization, application, or case boundary.
-2. The API checks report permissions.
-3. The report service queries only scoped records.
-4. The report service generates a transaction summary, activity-log export, or case export.
-5. Report metadata is persisted.
-6. Downloads require a separate permission check.
-7. Generation and download are written to the activity log.
+```mermaid
+sequenceDiagram
+  participant UI as Audit UI
+  participant Reports as Reports API
+  participant DB as PostgreSQL
+  participant Log as AuditorsLogModule
 
-## Admin and team-management flow
+  UI->>Reports: Generate case or activity report
+  Reports->>Reports: Check reports:create
+  Reports->>DB: Query scoped case or activity rows
+  Reports->>DB: Insert reports(file_blob, metadata, type, creator)
+  Reports->>Log: Stage report generated
+  UI->>Reports: Download report
+  Reports->>Reports: Check reports:download
+  Reports->>DB: Read reports row in org/application scope
+  Reports->>Log: Stage report downloaded
+```
 
-1. An organization owner or admin opens the organization workspace.
-2. The API verifies organization ownership or admin permissions.
-3. The admin manages team membership, applications, or permission buckets.
-4. The system writes all material changes to the activity log.
+Report rows store the generated file as `file_blob`, plus metadata such as boundary, creator, and report type.
 
-## Contract registration flow
+## Activity-log flow
 
-1. An organization owner or application admin registers an application.
-2. The application is bound to one or more contract addresses or privacy-pool identifiers.
-3. The chain indexer uses the registry to know which contracts to scan and how to classify events.
-4. Indexed events are mapped back to the correct organization/application context.
-5. Disclosure cases operate against this application/contract boundary.
+`AuditorsLogModule` records platform activity after successful request handling.
 
-## Trust and data-boundary model
+| Scope | Storage fields |
+| --- | --- |
+| Organization | `org_id`, actor fields, object, details |
+| Application | Organization fields plus `application_foreign_id` |
+| Case | Organization/application fields plus `case_id` |
 
-The architecture distinguishes:
-
-- Public on-chain data: commitments, nullifier hashes, roots, event envelopes, and contract metadata
-- Encrypted audit data: raw payloads indexed into storage
-- Backend-interpreted data: normalized records created by the interpretation worker
-- User-disclosed data: fields exposed through approved cases and reports
-- Activity evidence: logs showing who requested, approved, accessed, generated, or downloaded sensitive data
-
-These boundaries define where privacy is preserved and where disclosure is controlled.
+List and export endpoints apply the same permission model as the UI routes they support.

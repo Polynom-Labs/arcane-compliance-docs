@@ -3,197 +3,198 @@ title: "Stellar privacy-pool integration"
 description: "Connect a Stellar application and Soroban privacy-pool contract to Arcane Compliance."
 ---
 
-This guide describes how an application connects to the Stellar privacy-pool system and how its on-chain activity becomes available in Arcane Compliance.
+This guide describes the Stellar/Soroban privacy-pool integration path: an application submits `transact` calls to the Soroban contract, and Arcane indexes the registered contract events for disclosure workflows.
 
-An integration has four parts:
-
-1. The application integrates with the wallet and privacy SDK.
-2. The application submits privacy-pool operations to Soroban contracts.
-3. Arcane registers the application and its contract addresses.
-4. Arcane indexes contract events and exposes scoped audit workflows.
-
-## Integration path
-
-Application + wallet + SDK submit privacy-pool operations to Soroban contracts. Arcane indexes registered contract events, stores encrypted audit records, interprets those records, and exposes scoped disclosure through the Audit UI and Audit API.
+## Integration model
 
 ```mermaid
 flowchart LR
   app["Application"]
-  wallet["Wallet"]
-  sdk["Privacy SDK"]
-  contract["Soroban privacy-pool contract"]
+  sdk["PrivacyPoolSDK"]
+  wallet["Stellar wallet"]
+  contract["PrivacyPoolsContract.transact"]
+  event["AuditEncodedDigest"]
   rpc["Stellar RPC"]
-  indexer["Arcane indexer"]
-  db["PostgreSQL"]
-  api["Audit API"]
+  scanner["Arcane Stellar scanner"]
+  audit["audit"]
+  interpreted["audit_interpretation"]
   ui["Audit UI"]
 
-  app --> wallet
   app --> sdk
-  wallet --> contract
+  app --> wallet
   sdk --> contract
-  contract --> rpc
-  rpc --> indexer
-  indexer --> db
-  db --> api
-  ui --> api
+  wallet --> contract
+  contract --> event
+  event --> rpc
+  rpc --> scanner
+  scanner --> audit
+  audit --> interpreted
+  interpreted --> ui
 ```
 
 ## Prerequisites
 
-An application integration requires:
+You need:
 
-- Stellar/Soroban environment
-- Deployed privacy-pool contract address
-- Access to the client SDK
-- Wallet support
-- Arcane organization account
-- Registered application in Arcane
-- RPC provider configuration
-- Required environment variables
+- A Stellar/Soroban network and RPC endpoint.
+- A deployed `PrivacyPoolsContract`.
+- Contract verification key and public slot configuration matching the circuit.
+- Contract decoding key for audit interpretation.
+- `@auditable/privacy-pool-zk-sdk` available to the application.
+- A Stellar wallet integration.
+- An Arcane organization and application record.
+- Backend chain, contract, asset, and application registry rows.
+- Scanner environment configured for the Stellar chain.
 
-## On-chain setup
+## Contract setup
 
-The on-chain setup starts with a deployed Soroban privacy-pool contract.
+Deploy `PrivacyPoolsContract` with:
 
-The contract is responsible for:
+| Constructor argument | Purpose |
+| --- | --- |
+| `tree_depth` | Commitment tree depth |
+| `vk_bytes` | Groth16 verification key bytes |
+| `public_n_inputs` | Public withdrawal slot count |
+| `public_n_outputs` | Public deposit slot count |
+| `admin` | Contract admin address |
 
-- Accepting deposits into the pool
-- Supporting private transfer and withdrawal operations
-- Maintaining the commitment tree
-- Tracking nullifier hashes
-- Verifying zero-knowledge proofs
-- Emitting audit-relevant events
-
-Arcane only indexes contracts that are registered to an organization/application context.
+The deployed contract exposes `transact`, public getters, and the `AuditEncodedDigest` event.
 
 ## Application setup
 
-The application integrates with the privacy-pool SDK and wallet layer.
+The application integrates the SDK and wallet.
 
-Application responsibilities:
+Application steps:
 
-- Connect to a supported Stellar wallet
-- Initialize the privacy SDK
-- Generate or accept private addresses
-- Construct deposit, transfer, transact, and withdrawal operations
-- Generate or attach the required proof data
-- Submit transactions to the privacy-pool contract
-- Surface transaction status and errors to the user
+1. Initialize `PrivacyPoolSDK`.
+2. Derive a user stealth address from a Stellar wallet signature when the user receives private funds.
+3. Read pool state needed for witness construction.
+4. Build coin and transaction inputs.
+5. Generate proof and public signals with `proveTransaction` or a higher-level SDK helper such as `proveWithdrawal`.
+6. Prepare encrypted audit bytes for the `encoded` argument.
+7. Ask the wallet to sign and submit `PrivacyPoolsContract.transact`.
 
-The application does not manage auditor access or disclosure cases. Those workflows belong to the Arcane audit platform.
+`deposit`, `withdraw`, and `transfer` are user-facing transaction shapes. The current contract call remains `transact`.
 
-## Arcane application registration
+## Soroban call shape
 
-Before Arcane can index and classify contract activity, an organization registers the application and its privacy-pool contracts.
+The application submits:
 
-Registration includes:
+```text
+transact(from, proof_bytes, pub_signals_bytes, encoded)
+```
 
-- Creating or selecting the organization
-- Creating the application record
-- Registering one or more contract addresses or pool identifiers
-- Assigning application administrators and auditors
-- Confirming that the indexer can read events from the registered contracts
+| Argument | Source |
+| --- | --- |
+| `from` | Wallet-authenticated Stellar address |
+| `proof_bytes` | SDK-serialized Groth16 proof |
+| `pub_signals_bytes` | SDK-serialized public signals |
+| `encoded` | Encrypted audit payload bytes |
 
-Application-contract binding is the link between on-chain events and case-scoped audit workflows.
+After successful proof verification and state update, the contract emits:
 
-## Event indexing
+```text
+AuditEncodedDigest(message_name = "transact", digest = encoded)
+```
 
-Arcane indexers scan configured chain sources and registered contract addresses.
+## Arcane registry setup
 
-The indexing pipeline:
+Arcane indexes only registered contracts.
 
-1. Reads ledgers from the configured Stellar RPC provider.
-2. Filters events from registered privacy-pool contracts.
-3. Parses commitments, nullifiers, transaction references, and audit payload data.
-4. Writes raw encrypted audit rows to storage.
-5. Updates checkpoints so the scanner can resume safely.
+Required backend registry data:
 
-Indexer failures are handled through retry and checkpoint state. Failed event parsing or interpretation errors remain visible to operators through backend status and logs.
+| Table | Required data |
+| --- | --- |
+| `chain` | Stellar chain name, `type = stellar`, RPC URL, optional network passphrase, optional initial ledger hint |
+| `contracts` | Soroban contract address, `chain_id`, `decoding_key`, optional `encoding_key` |
+| `assets` | Asset metadata and Stellar asset contract references |
+| `asset_pool_contracts` | Links assets to pool contracts |
+| `applications` | Organization application with `foreign_id`, `application_type = stellar-pool`, and `association.contract_id` |
+| `team_member_application_permissions` | Admin/auditor permission buckets for application users |
 
-## Audit interpretation
+The backend initialization flow can seed organizations, team metadata, chains, contracts, assets, applications, and permissions from configured environment and seed files.
 
-The interpretation worker converts raw encrypted audit events into normalized records used by case and reporting workflows.
+## Scanner setup
 
-The interpretation pipeline:
+Configure the backend Stellar scanner with:
 
-1. Reads raw indexed audit rows.
-2. Decrypts or resolves audit payloads according to the configured key model.
-3. Validates event structure.
-4. Normalizes events into interpreted audit records.
-5. Marks interpretation status and errors.
+| Configuration | Purpose |
+| --- | --- |
+| Stellar RPC URL | Ledger and event source |
+| Stellar chain name | Matches `chain.name` |
+| Stellar network passphrase | Used when parsing transaction metadata |
+| Initial ledger | Starting point before a checkpoint exists |
+| Ledgers per request | Scanner batch size |
+| Scanner chain list | Registers Stellar scanner providers |
 
-Interpreted records are not automatically visible to auditors. User access requires authentication, permission checks, case assignment, approved disclosure scope, and an active access window.
+The scanner writes:
 
-## Identity and permissions
+- `stellar_scans` checkpoint rows.
+- `audit` raw event rows.
+- `audit_chain` links.
 
-Arcane uses an enterprise identity provider for authentication and maps authenticated users to Arcane organization membership.
+## Interpretation setup
 
-Permission scopes include:
+For Stellar rows, interpretation requires `contracts.decoding_key`.
 
-- Organization owner access
-- Application administrator access
-- Auditor access
-- Case-level auditor assignment
-- Report creation, listing, and download access
-- Activity-log access
+The worker:
 
-The Audit API enforces permissions before returning application, case, report, or transaction data.
+1. Locks uninterpreted `audit` rows.
+2. Parses `public_signals_json`.
+3. Decrypts `cyphertext` with `decoding_key`.
+4. Plans normalized `deposit`, `withdraw`, or `transfer` rows.
+5. Writes `audit_interpretation`.
+6. Stores `interpretation_error` if processing fails.
 
-## Disclosure workflow
+Interpreted rows are still backend data. Auditor visibility requires case scope and permissions.
 
-Disclosure is case-scoped.
+## Access setup
 
-The workflow:
+Application users need:
 
-1. An auditor creates a disclosure request.
-2. The request includes reason, basis, period, requested fields, access window, and assigned auditors.
-3. An application administrator reviews the request.
-4. Approved requests create active investigation cases.
-5. Assigned auditors can review interpreted records matching the approved scope.
-6. Case access expires after the configured access window.
-7. Request, approval, access, and report actions are recorded in the activity log.
+| Access area | Backend source |
+| --- | --- |
+| Organization session | Identity provider session and `organisations` row |
+| Owner permissions | `team_member_meta.permissions` / owner resolution |
+| Application permissions | `team_member_application_permissions` arrays |
+| Application route segment | `applications.foreign_id` |
+| Case access | `case_auditor_assignments` plus active access window |
 
-## Reports and activity logs
+The UI route for application workspaces is `/workspace/application/:foreignId`.
 
-Reports are generated from scoped records.
+## Verification checklist
 
-Supported report boundaries:
+Use this checklist for an end-to-end Stellar privacy-pool integration:
 
-- Organization
-- Application
-- Case
-
-Report outputs include transaction summaries and activity-log exports. Report generation and download actions require permission checks and are recorded in the activity log.
-
-## Testing and verification
-
-Use this checklist to verify an integration:
-
-- Contract deployed
-- Application can submit a deposit
-- Application can submit a private transfer
-- Application can submit a withdrawal
-- Contract emits expected events
-- Indexer ingests events
-- Raw encrypted audit rows exist
-- Interpretation worker produces records
-- Disclosure request can be created
-- Administrator can approve the request
-- Assigned auditor can view scoped records
-- Report can be generated and downloaded
-- Activity log records request, approval, access, report generation, and download
+- Contract is deployed with the expected tree depth, verification key, and public slot counts.
+- Application can initialize `PrivacyPoolSDK`.
+- Application can derive or import a `stpl1` stealth address.
+- Application can generate proof bytes and public signal bytes.
+- Wallet can submit `transact`.
+- Contract stores commitments/nullifiers/roots as expected.
+- Contract emits `AuditEncodedDigest`.
+- `chain` and `contracts` rows exist for the Stellar deployment.
+- `applications` row exists with `application_type = stellar-pool` and `association.contract_id`.
+- Scanner advances `stellar_scans`.
+- Scanner writes `audit` rows with `event_type = transact`.
+- Interpretation writes `audit_interpretation` rows.
+- `GET /auth/me` returns the expected `applications[foreignId]` permissions.
+- Auditor can create a case request.
+- Administrator can approve or close the request.
+- Assigned auditor can open the approved case and see only scoped fields.
+- Report generation and download work with separate permissions.
+- `auditors_log` records request, decision, access, report, and download events.
 
 ## Troubleshooting
 
-Common failures:
-
-- Contract not registered
-- RPC provider unavailable
-- Indexer checkpoint stuck
-- Event parser mismatch
-- Raw event exists but interpretation failed
-- User authenticated but lacks permission
-- User has application permission but is not assigned to the case
-- Case access window expired
-- Report generation succeeds but download permission is missing
+| Symptom | Check |
+| --- | --- |
+| No audit rows | Contract registered to the correct `chain_id`, scanner chain name configured, checkpoint range covers event ledger |
+| Scanner runs but ignores event | Event is from a successful contract call and event topic maps to a supported audit type |
+| Duplicate-looking scan | `audit` upsert is idempotent by `(contract_id, soroban_event_id)` |
+| Public signals missing or wrong | Scanner calldata parser can read the `transact` invocation metadata |
+| Interpretation fails | `contracts.decoding_key`, `audit.cyphertext`, and `audit.public_signals_json` |
+| UI route 404 or empty | `applications.foreign_id` matches `/workspace/application/:foreignId` |
+| User sees workspace but not route | Required permission key is absent from the relevant application bucket |
+| Auditor cannot open case | Case assignment, approval status, application scope, and access window |
+| Report generation succeeds but download fails | `reports:create` and `reports:download` are separate permissions |

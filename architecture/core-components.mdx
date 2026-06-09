@@ -1,236 +1,233 @@
 ---
 title: "Core components"
-description: "Technical components in the Stellar/Soroban privacy-pool compliance architecture."
+description: "Concrete components in the Stellar/Soroban privacy-pool compliance architecture."
 ---
 
-Arcane Compliance on Stellar is composed of client-side applications, Soroban privacy contracts, chain-ingestion services, storage, backend workers, and auditor-facing API/UI surfaces.
+Arcane Compliance is implemented as a Stellar/Soroban privacy-pool contract, a client SDK, a NestJS backend, PostgreSQL, and a React Audit UI. Reference applications are outside the audit platform; they submit Soroban transactions that the audit platform later indexes.
 
-## Reference applications
+## Component map
 
-Reference applications are external client applications that demonstrate or integrate with the privacy pool.
+| Component | Code location | Responsibility |
+| --- | --- | --- |
+| Soroban privacy-pool contract | `stellar-privacy-layer-contracts/contract/src/lib.rs` | `PrivacyPoolsContract`, `transact`, storage, Groth16 verification, token transfers, audit event emission |
+| Circuits | `stellar-privacy-layer-contracts/circuits` | `Transaction(20,2,2,1,1)`, deposit/withdraw constraints, commitment/nullifier logic, public signals |
+| Client SDK | `stellar-privacy-layer-contracts/client-sdk` | `PrivacyPoolSDK`, coin generation, witness preparation, proof generation, stealth addresses, Soroban serialization |
+| Backend app | `stellar-privacy-layer-backend/src/app.module.ts` | NestJS module graph, TypeORM, scheduler, chain scanners, auth, cases, reports, logs |
+| Stellar scanner | `src/scanner`, `src/stellar-rpc` | Ledger scanning, event parsing, calldata extraction, audit-row upsert, checkpoint update |
+| Interpretation worker | `src/audit-interpretation` | Decrypt raw audit rows and write normalized interpretation records |
+| API and guards | `src/*/*.controller.ts`, `src/auth`, `src/applications/guards` | Authenticated HTTP routes, permission checks, application route-scope checks |
+| PostgreSQL entities | `src/**/entities/*.ts` | Registry, audit, access, disclosure, report, and activity-log tables |
+| Audit UI | `stellar-audit-ui/src` | Workspaces, routes, permission-aware navigation, disclosure/case/report screens |
+
+## External applications
+
+Reference or partner applications provide the end-user privacy-pool flow.
 
 Responsibilities:
 
-- Provide user-facing deposit, transfer, transact, and withdrawal flows
-- Connect to a supported Stellar wallet
-- Use the privacy SDK for private-address handling, coin generation, proof generation, and transaction construction
-- Submit transactions to the Soroban privacy-pool contract
+- Connect to a Stellar wallet.
+- Initialize `@auditable/privacy-pool-zk-sdk`.
+- Generate or accept a `stpl1` stealth address.
+- Build coins, witnesses, Groth16 proofs, public signal bytes, and encoded audit bytes.
+- Submit a Soroban `transact` invocation through the user's wallet.
+- Show transaction status and application-level errors.
 
 Non-responsibilities:
 
-- Disclosure case management
-- Arcane backend processing
-- Audit permission enforcement
+- Running the Arcane scanner.
+- Interpreting audit rows.
+- Managing disclosure requests, cases, auditors, reports, or activity logs.
+- Enforcing auditor permissions.
 
-Private-pool operations such as deposit, withdraw, transfer, and transact belong to the privacy-pool contract and protocol layer. The reference application invokes these operations; it does not define the audit system.
+## SDK and wallet layer
 
-## Wallet and SDK layer
+`PrivacyPoolSDK` is the client-side technical boundary between an application and the Soroban contract.
 
-The wallet and SDK layer sits between user-facing applications and the on-chain privacy pool.
+Important SDK responsibilities:
 
-Responsibilities:
+- `buildStealthAddressSignMessage` and `generateStealthAddressFromStellarSignature` derive the recipient private address from a Stellar wallet signature.
+- `generateCoin*` methods construct commitment-compatible coin data.
+- `buildWithdrawMerkleWitness` prepares Merkle inclusion data from current pool state.
+- `proveWithdrawal` and `proveTransaction` produce proof bytes and public signals for the `Transaction(20,2,2,1,1)` circuit.
+- `proofToHex` and `publicToHex` serialize proof data for Soroban.
 
-- Wallet connection and transaction signing
-- Private address generation
-- Coin construction and local secret handling
-- Merkle witness preparation where applicable
-- Proof generation and serialization
-- Transaction submission helpers
+The wallet signs and submits the Soroban transaction. The Audit UI is not involved in end-user transfer execution.
 
-See [Cryptography](/architecture/cryptography) for commitments, nullifiers, private addresses, and SDK setup.
+## Soroban contract
 
-## Soroban ZK privacy-pool contract
+The current contract has a single public transaction entrypoint:
 
-The privacy-pool contract is the on-chain component responsible for private asset movement.
+```rust
+pub fn transact(
+    env: &Env,
+    from: Address,
+    proof_bytes: Bytes,
+    pub_signals_bytes: Bytes,
+    encoded: Bytes,
+) -> Result<(), Error>
+```
 
-Responsibilities:
+`transact` handles the protocol-level deposit, withdrawal, transfer, and mixed transaction shapes through public signals and witness data. These are not separate contract methods.
 
-- Accept deposits into the pool
-- Create and store commitments
-- Maintain the commitment Merkle tree
-- Track nullifier hashes to prevent double spending
-- Maintain recent Merkle root history
-- Verify zero-knowledge proofs
-- Execute withdrawals, transfers, or combined transact flows
-- Emit audit-relevant contract events or audit payload digests
+Contract responsibilities:
 
-Public state includes only the information intentionally exposed by the protocol, such as commitments, nullifier hashes, root history, and encoded event data. Sender, recipient, and amount remain private unless a specific operation intentionally discloses them.
+- Require authentication from `from`.
+- Parse Groth16 proof bytes and public signal bytes.
+- Check that `stateRoot` is in recent root history.
+- Read nullifier hashes from public signals and reject reused hashes.
+- Verify the proof with the stored verification key.
+- Store either zero output commitments or exactly two output commitments.
+- Store leaf ephemeral BabyJubJub public keys next to commitment leaves.
+- Update `LeafCount`, `TREE_ROOT_KEY`, `PairwiseFrontier`, and the 90-slot root-history ring buffer.
+- Apply public deposit transfers from `from` to the contract.
+- Apply public withdrawal transfers from the contract to the public Stellar account encoded in `withdrawAddressHi` / `withdrawAddressLo`.
+- Emit `AuditEncodedDigest` with `message_name = "transact"` and `digest = encoded`.
 
-## Contract events and audit payloads
+Public getters expose Merkle root, depth, commitment count, commitments, leaf ephemeral keys, pairwise frontier, nullifier-consumed state, token balance, public slot config, and admin.
 
-Contract events are the bridge between the on-chain privacy layer and the Arcane audit platform.
+## Contract event boundary
 
-They can include:
+The scanner treats the contract event as the on-chain audit boundary.
 
-- Commitment events
-- Nullifier usage events
-- Pool operation identifiers
-- Contract address or application binding data
-- Encrypted audit payload digests or references
-- Ledger or transaction metadata required for indexing
+Current event shape:
 
-The event model distinguishes public contract data, encrypted audit data, and fields available only after interpretation or approved disclosure.
+```rust
+#[contractevent(topics = ["audit", "encoded_digest"], data_format = "single-value")]
+pub struct AuditEncodedDigest {
+    #[topic]
+    message_name: String,
+    digest: Bytes,
+}
+```
 
-## Application and contract registry
+The backend maps the `audit` topic to `event_type = transact`. It stores the sealed audit payload as `audit.cyphertext` and stores parsed public signals in `audit.public_signals_json`.
 
-The platform tracks which contracts belong to which organization and application context.
+## Backend module graph
 
-Responsibilities:
+`AppModule` imports the runtime modules below.
 
-- Register organizations
-- Register applications
-- Register contract addresses or pool identifiers
-- Bind indexed events to the relevant organization/application
-- Provide scoped contract lists to indexers and backend services
+| Module | Responsibility |
+| --- | --- |
+| `BlockchainModule` | Chain records and chain type model |
+| `ContractsModule` | Registered pool contracts, chain binding, decoding/encoding keys, asset links |
+| `AssetsModule` | Stellar asset records and contract-asset links |
+| `ApplicationsModule` | Organization-scoped applications and `foreign_id` route segments |
+| `ScannerModule` | Stellar and Solana scanner registration plus scheduled scanner ticks |
+| `AuditModule` | Raw audit rows and transaction query endpoints |
+| `AuditInterpretationModule` | Scheduled interpretation batch runner and interpretation tables |
+| `AuthModule` | `GET /auth/me`, permission constants, guards, session-to-permission mapping |
+| `WorkosAuthModule` | WorkOS-backed OAuth, organization selection, JWT validation flow |
+| `MagicAuthModule` | Magic Auth email OTP flow |
+| `AdminsModule` | Organization/team/application access management |
+| `CasesModule` | Disclosure request creation, approval, case worklists, assignments, access scope; imports `DisclosureRequestModule` |
+| `ReportsModule` | Transaction summary reports, activity reports, downloads |
+| `AuditorsLogModule` | Activity log staging, persistence, lists, exports |
 
-Application-contract binding is the link between on-chain events and case-scoped audit workflows.
+## PostgreSQL tables
 
-## Chain indexer
+Registry and chain configuration:
 
-The chain indexer is the ingestion boundary between Stellar and Arcane.
+| Table | Purpose |
+| --- | --- |
+| `chain` | Chain name, type (`stellar` or `solana`), RPC URL, Stellar network passphrase, initial ledger hint |
+| `contracts` | Contract address, chain id, decoding key, encoding key |
+| `assets` | Asset metadata and Stellar asset contract fields |
+| `asset_pool_contracts` | Asset-to-contract link table |
+| `applications` | Organization application, `foreign_id`, display fields, `application_type`, contract association |
 
-Responsibilities:
+Audit pipeline:
 
-- Read ledgers from configured Stellar RPC providers
-- Filter events from registered Soroban privacy-pool contracts
-- Parse audit-relevant events
-- Maintain checkpoints or cursors
-- Retry failed reads
-- Write raw encrypted audit events to storage
+| Table | Purpose |
+| --- | --- |
+| `stellar_scans` | Per contract/chain scan checkpoint with `block_start`, `block_end`, `last_signature` |
+| `audit` | Raw audit event row, unique by `(contract_id, soroban_event_id)` |
+| `audit_chain` | Many-to-many link from audit row to chain |
+| `audit_interpretation` | Normalized interpretation rows, unique by `(audit_id, seq)` |
+| `token_transfers` | Parsed token transfer rows where available |
 
-The Stellar implementation uses Stellar RPC scanning and Soroban event parsing. Additional chains require separate chain-specific adapters before their events can enter the shared audit storage and interpretation model.
+Access and workflow:
 
-## PostgreSQL data layer
+| Table | Purpose |
+| --- | --- |
+| `organisations` | Arcane organization record keyed by external org id |
+| `team_member_meta` | Team member identity, invitation, role, org, expiry, and owner-level permissions |
+| `team_member_application_permissions` | Per-application `common`, `administrator`, and `auditor` permission arrays |
+| `disclosure_requests` | Parent request: org, application, requester, reason, status, type, approval count |
+| `request_decisions` | Approve/reject decision records |
+| `case_requests` | Case-specific period, access window, disclosure flags, future case id, contract filters |
+| `cases` | Approved case id, source request, contract addresses, access duration |
+| `case_request_auditor_assignments` | Request-time auditor assignments |
+| `case_auditor_assignments` | Active case auditor assignments with soft-delete history |
+| `reports` | Report blob, metadata, type, creator, org/application scope |
+| `auditors_log` | Compliance activity events, actor, org, application, case, object, details |
 
-The data layer is an explicit architecture boundary.
+## Application registry
 
-Main datasets:
+An Arcane application is a backend record, not the same thing as a deployed frontend.
 
-- Raw encrypted audit events
-- Interpreted audit records
-- Organizations and users
-- Applications and contract registrations
-- Disclosure requests and case records
-- Case auditor assignments
-- Reports and export metadata
-- Activity log entries
+`applications` fields used by the architecture:
 
-## Raw encrypted audit event store
+- `org_id` scopes the application to one organization.
+- `foreign_id` is the stable route/API segment exposed to the Audit UI and application-scoped APIs.
+- `application_type` distinguishes `stellar-pool` from `solana-confidential-token`.
+- `association.contract_id` links the application to a registered contract row.
 
-This store contains indexed events before they become disclosure-ready records.
+The UI route is `/workspace/application/:foreignId`. Application-scoped API routes use `/api/applications/:foreignId/...`. The backend resolves that route segment to an internal `application_id` before permission and query execution.
 
-Typical fields:
+## Scanner
 
-- Organization/application reference
-- Contract address or pool identifier
-- Ledger and transaction reference
-- Event type
-- Encrypted payload or payload digest
-- Indexing status
-- Timestamps
+The Stellar scanner consists of:
 
-## Audit interpretation worker
+- `ScannerModule.register({ stellarChainNames, solanaChainNames })`
+- `StellarRpcModule.register({ chainName })`
+- `LedgerScannerSchedulerService`
+- `StellarLedgerScannerService`
+- `performStellarContractScan`
+- `buildAuditFromStellarEvent`
+- `persistScanResultsQuery`
 
-The interpretation worker is an asynchronous backend process.
+The scanner lists contracts for a chain, reads ledger ranges from Stellar RPC, filters successful contract events, parses public signal bytes and signer data from `transact` calldata when available, upserts raw audit rows, links them to the chain, and updates `stellar_scans`.
 
-Responsibilities:
+## Interpretation worker
 
-- Read raw encrypted audit events
-- Decrypt or resolve payloads under the configured key model
-- Validate event structure
-- Normalize events into records used by disclosure cases and reports
-- Mark interpretation status and errors
+`AuditInterpretationRunnerService` runs every 12 seconds and locks up to 25 uninterpreted audit rows in one database transaction.
 
-Interpretation is a backend processing step. Human access is controlled by organization permissions, case scope, assigned auditors, approvals, and access windows.
+For Stellar rows, `interpretStellarAuditRow`:
 
-## Interpreted audit records
-
-Interpreted audit records are normalized records queried for cases, reports, and review workflows.
-
-They can include:
-
-- Transaction lifecycle information
-- Sender-side fields where available and permitted
-- Recipient-side fields where available and permitted
-- Transaction identifiers
-- Contract/application mapping
-- Time period and status metadata
-
-Access to interpreted records is scoped by permissions, case assignment, requested fields, approved period, contract filters, and access-window rules.
-
-## Identity and access module
-
-The public architecture treats identity as an enterprise identity provider boundary.
-
-Responsibilities:
-
-- Authenticate users through an external identity provider
-- Map external identity to Arcane organization membership
-- Resolve organization owner, application administrator, auditor, and other permission buckets
-- Enforce permission checks before API actions
-
-See [Identity and access](/architecture/identity-and-access) for workspace resolution and permission keys.
-
-## Disclosure request and case service
-
-Disclosure is a feature of the audit platform.
-
-Responsibilities:
-
-- Create disclosure requests
-- Capture basis, reason, time period, scope fields, and assigned auditors
-- Track pending, approved, rejected, withdrawn, or closed state
-- Create approved investigation cases
-- Enforce access windows
-- Filter case worklists by assigned auditors and approved scope
-
-A disclosure case grants scoped access to matching interpreted records. It does not grant global access to private data.
-
-## Reports and export service
-
-Reports convert scoped case data into downloadable outputs.
-
-Responsibilities:
-
-- Generate transaction summaries
-- Generate activity-log exports
-- Store report metadata
-- Enforce report creation, listing, and download permissions
-- Include boundary metadata such as organization, application, case, period, and generated-by user
-
-## Activity log
-
-The activity log is a cross-cutting audit trail.
-
-It records:
-
-- Organization and team changes
-- Application registration changes
-- Permission changes
-- Disclosure request creation
-- Approval, rejection, withdrawal, or closure
-- Case access
-- Report generation
-- Export download
+- Requires `contracts.decoding_key`.
+- Parses `audit.public_signals_json`.
+- Decrypts and decodes `audit.cyphertext`.
+- Plans one or more interpretation rows.
+- Replaces existing `audit_interpretation` rows for that audit id.
+- Stores a truncated interpretation error on the source `audit` row if processing fails.
 
 ## Audit API
 
-The Audit API is the backend interface used by the Audit UI.
+The API is the server-side enforcement surface for the Audit UI.
 
-Responsibilities:
+Representative routes:
 
-- Resolve authenticated session context
-- Serve organization, application, case, report, and activity-log data
-- Enforce permissions before returning scoped data
-- Trigger report generation
-- Record activity-log events for sensitive actions
+| Route | Purpose |
+| --- | --- |
+| `GET /auth/me` | Current organization and permission buckets |
+| `GET /api/audit/contract/:contractId` | Contract transaction/audit rows for authorized users |
+| `POST /api/applications` | Create an organization application |
+| `GET /api/applications/:applicationId` | Read application details by internal id |
+| `GET /api/applications/:foreignId/cases` | Application case worklists and case detail routes |
+| `POST /api/applications/:foreignId/case-reports` | Case transaction summary report generation |
+| `GET /api/applications/:foreignId/reports` | Application report list |
+| `GET /api/applications/:foreignId/auditors-log` | Application activity log |
+| `GET /api/applications/:foreignId/cases/:caseId/auditors-log` | Case activity log |
+
+Client-side permission checks only shape navigation. API guards remain the source of truth.
 
 ## Audit UI
 
-The Audit UI is the frontend surface for administrator and auditor workflows.
+The UI is a React/Vite application with these workspace routes:
 
-Workspaces:
+| Workspace | Routes |
+| --- | --- |
+| Organization owner | `/workspace/organization-owner/overview`, `/applications`, `/team`, `/activity`, `/reports` |
+| Application | `/workspace/application/:foreignId/overview`, `/cases`, `/cases/new`, `/cases/:caseId`, `/disclosure`, `/reports`, `/log`, `/settings` |
 
-- Organization owner workspace
-- Application administrator workspace
-- Auditor/case-review workspace
+Legacy application auditor/admin routes redirect to `/workspace/application/:foreignId/*`.

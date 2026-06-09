@@ -6,7 +6,7 @@ description: "Commitments, nullifiers, private addresses, and client SDK helpers
 Private transfers rely on cryptographic commitments, nullifiers, and ECDH-based private addresses. This page describes the objects involved and how the client SDK helps you derive shared secrets and encrypt application data.
 
 <Warning>
-The Poseidon hash implementation in `soroban-privacy-pools` is a prototype for research and educational purposes. It is not audited and exists to keep Circom circuits and Rust/WASM code consistent.
+The Poseidon hash implementation used by the circuits, contract helpers, and SDK WASM code is a prototype for research and educational purposes. It is not audited and exists to keep Circom and Rust/WASM code consistent.
 </Warning>
 
 ## Cryptographic model
@@ -40,7 +40,7 @@ The Rust client SDK in `client-sdk/crate/src/coin.rs` implements the same formul
 - `nullifierHash = Poseidon(nullifier)` is public when a coin is spent.
 - The Soroban contract stores nullifier hashes and rejects reuse.
 
-Use `PrivacyPoolSDK.calculateNullifierHash(nullifier)` to compute the hash from a coin's decimal nullifier string.
+Use an initialized SDK instance and `sdk.calculateNullifierHash(nullifier)` to compute the hash from a coin's decimal nullifier string.
 
 ## Deposit-side private address flow
 

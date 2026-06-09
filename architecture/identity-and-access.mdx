@@ -1,34 +1,53 @@
 ---
 title: "Identity and access"
-description: "Enterprise identity, workspaces, permission buckets, and enforcement in the audit platform."
+description: "Identity implementation, auth-me response, permission buckets, route scope, and API enforcement."
 ---
 
-Identity and access control who can see and do what in the audit platform. Arcane integrates with an enterprise identity provider for authentication and organization membership. The Arcane auth module maps authenticated sessions into fine-grained permission buckets enforced by the backend and mirrored in the audit UI.
+Identity and access control who can enter the Audit UI and which organization, application, case, report, transaction, and activity-log data they can access.
 
-Permission names below match the **Group** and **Permission** labels on the organization owner team access invite and member edit forms.
+The codebase implements enterprise identity with WorkOS modules and email OTP with Magic Auth. The architecture boundary is the authenticated session and the `GET /auth/me` permission response consumed by the Audit UI and API guards.
 
-## Enterprise identity boundary
+## Identity implementation
 
-The identity provider boundary provides:
+| Component | Responsibility |
+| --- | --- |
+| `WorkosAuthModule` | WorkOS-backed authentication, organization selection, session/JWT flow |
+| `MagicAuthModule` | Email OTP authentication flow |
+| `WorkosAuthGuard` | Backend route guard for authenticated API requests |
+| `OrganisationSessionService` | Organization-session handling |
+| `AuthMeService` | Session-to-permission mapping |
 
-- Organization membership and invitations
-- Google OAuth and Magic Auth email OTP sign-in
-- Organization selection before session completion
-- JWT-based sessions verified against the identity provider's signing keys
+Session identity is mapped to:
 
-Users must select an organization before their session completes. Users with no allowed organization or no membership in the selected organization do not receive a session.
+- Selected organization id.
+- User id and email.
+- Team member metadata in `team_member_meta`.
+- Owner-level permissions from organization/team metadata.
+- Application-level permissions from `team_member_application_permissions`.
 
-## Auth-me response
+## Access storage
 
-`GET /auth/me` returns the effective permission shape for the current session:
+| Table | Fields used for access |
+| --- | --- |
+| `organisations` | Organization id and display metadata |
+| `team_member_meta` | `org_id`, `workos_invitation_id`, `workos_user_id`, `invite_email`, `full_name`, `role_slug`, `permissions`, `external_org`, `access_expires_at` |
+| `applications` | `org_id`, `foreign_id`, `name`, `application_type`, `association.contract_id` |
+| `team_member_application_permissions` | `team_member_meta_id`, `application_id`, `common_permissions`, `administrator_permissions`, `auditor_permissions` |
+| `case_auditor_assignments` | Case-level assignment for auditor worklists and case access |
+
+## `GET /auth/me`
+
+`GET /auth/me` returns the organization, owner permissions, and application permission buckets for the current session.
+
+Example shape:
 
 ```json
 {
   "organization_info": { "org_id": "org_...", "name": "Example Org" },
   "owner": { "applications:read": true },
   "applications": {
-    "app_42": {
-      "application_info": { "name": "Payments App" },
+    "payments-demo": {
+      "application_info": { "name": "Payments Demo" },
       "common": { "logs:view_activity": true },
       "administrator": { "cases:approve_creation": true },
       "auditor": { "reports:view_transactions": true }
@@ -37,88 +56,120 @@ Users must select an organization before their session completes. Users with no 
 }
 ```
 
-- **`owner`** — present only when the caller has organization owner permissions
-- **`applications[applicationId]`** — per-application buckets when the user has application-scoped grants
+Important keys:
 
-The example above includes **Organization ownership — Read applications**, **Common access — View activity log**, **Case governance — Approve case creation**, and **Reports and logs — View transactions**.
+- `owner` contains organization owner permissions.
+- `applications[foreignId]` contains per-application buckets.
+- `foreignId` is `applications.foreign_id`, also used in `/workspace/application/:foreignId` and `/api/applications/:foreignId/...`.
 
 ## Workspace resolution
 
-The audit UI builds a workspace picker from `auth/me`:
+The UI builds available workspaces from `auth/me`.
 
-1. If any owner permission is granted, show one **Organization** workspace row.
-2. For each application where the user has any granted bucket, show one **Application** workspace row.
-
-Routes:
-
-- Organization owner: `/workspace/organization-owner/*`
-- Application: `/workspace/application/:applicationId/*`
-
-## Organization owner permissions
-
-Granted in the **Organization** section of the team access form.
-
-| Group | Permission | Key |
+| UI workspace | Condition | Route |
 | --- | --- | --- |
-| Organization ownership | Create applications | `applications:create` |
-| Organization ownership | Read applications | `applications:read` |
-| Organization ownership | Manage application administrators | `admins:manage_application_administrators` |
-| Organization ownership | View organization activity log | `logs:view_activity` |
-| Reports and logs | Create organization reports | `reports:create` |
-| Reports and logs | List organization reports | `reports:list` |
-| Reports and logs | Download organization reports | `reports:download` |
+| Organization owner | At least one `owner` permission is granted | `/workspace/organization-owner/*` |
+| Application | At least one permission bucket exists for `applications[foreignId]` | `/workspace/application/:foreignId/*` |
 
-## Application permissions
+Navigation is filtered by permission keys. API checks still enforce access server-side.
 
-Granted per application in the team access form. The same API key can appear under different groups depending on scope — for example, **View organization activity log** (organization owner) and **View activity log** (application common access) both map to `logs:view_activity`.
+## Owner permissions
 
-### Common access
+Granted at organization scope.
 
-| Group | Permission | Key |
-| --- | --- | --- |
-| Common access | View activity log | `logs:view_activity` |
+| Permission | Key |
+| --- | --- |
+| Create applications | `applications:create` |
+| Read applications | `applications:read` |
+| Manage application administrators | `admins:manage_application_administrators` |
+| View organization activity log | `logs:view_activity` |
+| Create organization reports | `reports:create` |
+| List organization reports | `reports:list` |
+| Download organization reports | `reports:download` |
 
-### Case governance (administrator)
+## Application permission buckets
 
-| Group | Permission | Key |
-| --- | --- | --- |
-| Case governance | Approve case creation | `cases:approve_creation` |
-| Case governance | Edit case auditors | `cases:edit` |
+Application permissions are stored as three arrays on `team_member_application_permissions`.
 
-### Case governance and reports (auditor)
+### Common
 
-| Group | Permission | Key |
-| --- | --- | --- |
-| Case governance | Create cases | `cases:create` |
-| Case governance | Withdraw pending case requests | `cases:withdraw_pending_request` |
-| Reports and logs | View transactions | `reports:view_transactions` |
-| Reports and logs | Create application reports | `reports:create` |
-| Reports and logs | List application reports | `reports:list` |
-| Reports and logs | Download application reports | `reports:download` |
+| Permission | Key |
+| --- | --- |
+| View activity log | `logs:view_activity` |
 
-### External auditor preset
+### Administrator
 
-External auditors receive a narrow default: **Reports and logs — View transactions** (`reports:view_transactions`) only. Organization owners configure broader access through team invite flows.
+| Permission | Key |
+| --- | --- |
+| Approve case creation | `cases:approve_creation` |
+| Edit case auditors | `cases:edit` |
+
+### Auditor
+
+| Permission | Key |
+| --- | --- |
+| Create cases | `cases:create` |
+| Withdraw pending case requests | `cases:withdraw_pending_request` |
+| View transactions | `reports:view_transactions` |
+| Create application reports | `reports:create` |
+| List application reports | `reports:list` |
+| Download application reports | `reports:download` |
+
+Default role buckets are defined in `permissions.constants.ts`. Organization owners can adjust access through team-management flows.
 
 ## UI permission mapping
 
-Application workspace nav items gate on application permissions:
+Application workspace navigation:
 
 | Nav item | Required permission |
 | --- | --- |
-| Case Review | Reports and logs — View transactions (`reports:view_transactions`) |
-| Disclosure Requests | Case governance — Approve case creation (`cases:approve_creation`) |
-| Reports | Reports and logs — List application reports (`reports:list`) |
-| Audit Log | Common access — View activity log (`logs:view_activity`) |
+| Case Review | `reports:view_transactions` |
+| Disclosure Requests | `cases:approve_creation` |
+| Reports | `reports:list` |
+| Audit Log | `logs:view_activity` |
 
-Case workspace tabs use similar mappings. The Review, Case Auditors, and Activity tabs require **Reports and logs — View transactions** (`reports:view_transactions`). The Reports tab requires **Reports and logs — List application reports** (`reports:list`).
+Case workspace tabs:
 
-## Enforcement
+| Tab | Required permission |
+| --- | --- |
+| Review | `reports:view_transactions` |
+| Case Auditors | `reports:view_transactions` |
+| Activity | `reports:view_transactions` |
+| Reports | `reports:list` |
 
-The audit API checks required permission keys on every request against the assembled `auth/me` object. Application-scoped endpoints use the matching application permission bucket; organization-scoped endpoints use the `owner` bucket.
+## API enforcement path
 
-The audit UI applies the same permission keys to navigation, pages, and write actions. Users only see destinations and controls their session allows.
+```mermaid
+sequenceDiagram
+  participant UI as Audit UI
+  participant API as API route
+  participant Auth as WorkosAuthGuard
+  participant Scope as ApplicationScopeGuard
+  participant Perms as PermissionsGuard
+  participant DB as PostgreSQL
 
-<Tip>
-Client permission checks improve UX but do not replace API enforcement. Always rely on API responses for authorization decisions.
-</Tip>
+  UI->>API: Request protected route
+  API->>Auth: Verify session
+  API->>Scope: Resolve :foreignId to applicationId when route is application-scoped
+  API->>Perms: Check required permission key
+  API->>DB: Query with org_id, application_id, case assignment, and access-window filters
+  API-->>UI: Return scoped response
+```
+
+Application-scoped routes do not trust the client to provide internal `application_id`. The server derives it from `:foreignId` and the authenticated organization.
+
+## Case-level access
+
+Application permission is necessary but not always sufficient.
+
+Case review additionally checks:
+
+- Case belongs to the same organization.
+- Case belongs to the resolved application.
+- Case request is not withdrawn.
+- Case has been approved.
+- User is assigned through `case_auditor_assignments` when auditor-scoped.
+- Case access has not expired under `access_days`.
+- Requested fields are within the approved disclosure flags.
+
+This is the access boundary for interpreted transaction data.

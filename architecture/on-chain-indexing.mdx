@@ -1,120 +1,132 @@
 ---
 title: "On-chain indexing"
-description: "How Stellar RPC scanners ingest Soroban privacy-pool events into encrypted audit records."
+description: "How the backend scans Stellar RPC, parses Soroban privacy-pool events, and stores raw audit rows."
 ---
 
-The on-chain indexer is the ingestion boundary between Stellar/Soroban and Arcane. It reads configured ledger ranges, extracts privacy-pool events from registered contracts, and persists encrypted audit rows for later interpretation.
+The Stellar indexer reads configured Stellar ledgers through Stellar RPC, filters events for registered Soroban privacy-pool contracts, and persists raw audit rows for interpretation.
 
-This page covers ingestion only. Interpretation is the next stage.
+The backend also registers Solana scanner providers. This page covers the Stellar/Soroban privacy-pool scanner.
 
-## Indexer responsibilities
+## Runtime components
 
-Each Stellar indexer:
-
-1. Connects to a configured Stellar RPC provider.
-2. Tracks scan progress with cursors or ledger checkpoints.
-3. Reads ledgers in bounded ranges.
-4. Extracts Soroban events, transaction metadata, and invoke calldata when required.
-5. Filters events from contracts registered to Arcane applications.
-6. Persists raw audit rows.
-7. Updates scan state after successful ingestion.
-
-The indexer does not grant user access to private data. It only moves chain events into backend storage.
-
-## Stellar ingestion flow
-
-The Stellar ledger scanner:
-
-1. Runs on a scheduled tick.
-2. Reads ledgers through Stellar RPC.
-3. Parses ledger metadata and transaction processing results.
-4. Derives Soroban contract events and relevant invoke calldata.
-5. Filters events by registered privacy-pool contract address.
-6. Maps events to raw audit rows.
-7. Advances scanner checkpoints.
-
-```mermaid
-flowchart LR
-  rpc["Stellar RPC"]
-  scanner["Ledger scanner"]
-  parser["Soroban event parser"]
-  registry["Application and contract registry"]
-  audit["Raw audit event store"]
-  checkpoint["Scanner checkpoint"]
-
-  rpc --> scanner --> parser
-  registry --> parser
-  parser --> audit
-  scanner --> checkpoint
-```
-
-## Contract registration
-
-Indexers scan registered contracts, not arbitrary chain activity.
-
-Registration binds:
-
-- Organization
-- Application
-- Stellar network
-- Soroban contract address
-- Optional pool identifier or contract metadata
-
-This binding lets Arcane classify indexed events under the correct organization/application context and later apply case-scoped disclosure rules.
-
-## Stored audit row
-
-Each ingested event becomes a raw audit row.
-
-| Field | Description |
+| Component | Responsibility |
 | --- | --- |
-| `contract_id` | Registered contract reference |
-| `tx_id` | Transaction hash |
-| `event_id` | Unique event identifier within the contract/indexing source |
-| `event_type` | Event type such as `deposit`, `withdraw`, or `transact` |
-| `cyphertext` | Encrypted audit payload |
-| `signer_account` | Transaction signer when available from metadata |
-| `public_signals_json` | Public proof signals when applicable |
-| `interpreted` | Whether interpretation has completed |
-| `interpretation_error` | Error captured by the interpretation worker |
+| `ScannerModule.register` | Registers scanner providers for configured Stellar and Solana chain names |
+| `StellarRpcModule.register` | Loads a `chain` row by name, validates `type = stellar`, creates `@stellar/stellar-sdk/rpc.Server` |
+| `LedgerScannerSchedulerService` | Runs bootstrap scan and scheduled Stellar scan ticks |
+| `StellarLedgerScannerService` | Lists contracts for one Stellar chain and scans each contract |
+| `performStellarContractScan` | Calculates ledger span from checkpoint, RPC retention, and scanner config |
+| `collectStellarAuditRows` | Reads ledger pages and collects accepted audit rows |
+| `buildAuditFromStellarEvent` | Maps Soroban event and calldata into an `audit` upsert object |
+| `persistScanResultsQuery` | Upserts `audit`, writes `audit_chain`, updates `stellar_scans` |
 
-Raw audit rows remain encrypted and chain-specific until interpretation runs.
+## Scanner scheduling
 
-## Checkpointing and retries
+`LedgerScannerSchedulerService` runs:
 
-The scanner maintains checkpoint state so ingestion can resume safely after restarts or transient RPC failures.
+- A bootstrap scan at service startup.
+- A scheduled Stellar scan using `STELLAR_LEDGER_SCAN_DECORATOR_INTERVAL_MS`.
+- A scheduled Solana scan using `SCAN_INTERVAL_MS`.
 
-Operational rules:
+The Stellar path resolves all configured Stellar scanner chain names from environment configuration, gets their registered scanner services, and calls `scan()`.
 
-- Advance checkpoints only after successful event persistence.
-- Treat parser errors as observable ingestion failures.
-- Retry transient RPC failures.
-- Keep failed or uninterpreted rows visible to backend status and logs.
-- Use idempotent writes for event rows so rescans do not duplicate audit records.
+Each `StellarLedgerScannerService` prevents overlapping scan cycles for the same service instance. If a previous cycle is still running, the next tick is skipped.
 
-## Scaling model
+## Contract selection
 
-```
-                    ┌────────────────────────┐
-                    │ Arcane audit backend   │
-                    └───────────┬────────────┘
-                                │
-              ┌─────────────────┼─────────────────┐
-              ▼                 ▼                 ▼
-      Stellar scanner A  Stellar scanner B  Stellar scanner C
-              │                 │                 │
-              ▼                 ▼                 ▼
-       testnet pool 1    mainnet pool 1     mainnet pool 2
+The scanner does not scan arbitrary chain activity.
+
+For each Stellar chain, it queries registered contracts:
+
+```text
+chain(type = stellar) -> contracts(chain_id) -> StellarLedgerScannerService
 ```
 
-Multiple scanner instances can cover different networks or contract sets. Contract registrations and scanner configuration define which ledgers and contracts each scanner watches.
+`applications.association.contract_id` links an Arcane application to a registered contract. That link is used later by application-scoped API routes and disclosure workflows.
 
-## Multi-chain extension point
+## Ledger span selection
 
-Other chains require separate chain-specific adapters and parsers. Their events can enter the shared audit storage and disclosure model only after they are normalized into the same raw/interpreted record boundaries.
+For each contract, the scanner determines:
 
-The Stellar/Soroban privacy-pool scanner is the current architecture described by this documentation section.
+| Input | Source |
+| --- | --- |
+| Previous checkpoint | `stellar_scans.block_end` for `(contract_id, chain_id)` |
+| Initial hint | `chain.initial_ledger_hint` or `STELLAR_INITIAL_LEDGER` |
+| RPC lower bound | `getLedgers(...).oldestLedger` |
+| RPC tip | `getLatestLedger().sequence` |
+| Batch size | `SCANNER_LEDGERS_PER_REQUEST` |
+
+The next scan starts at `max(previousEnd + 1, oldestLedger)`. If the next ledger is past the RPC tip, the scan is skipped for that contract.
+
+## Event parsing
+
+For each ledger page:
+
+1. Read ledger metadata from Stellar RPC.
+2. Extract Soroban events for the registered contract address.
+3. Ignore events that are not in successful contract calls.
+4. Read `transact` calldata from ledger metadata when available.
+5. Map event topic:
+
+| Event topic | Stored `event_type` |
+| --- | --- |
+| `audit` | `transact` |
+| `transact` | `transact` |
+| `deposit` | `deposit` |
+| `withdraw` | `withdraw` |
+
+The current contract emits `AuditEncodedDigest` under the `audit` topic with `message_name = "transact"`, so current Stellar privacy-pool rows are stored as `event_type = transact`.
+
+## Raw audit upsert
+
+`buildAuditFromStellarEvent` produces the row upserted into `audit`.
+
+| Column | Value |
+| --- | --- |
+| `contract_id` | Registered contract id |
+| `tx_id` | Stellar transaction hash |
+| `soroban_event_id` | Stellar event id |
+| `event_type` | Mapped event type |
+| `cyphertext` | Sealed audit bytes from the event value |
+| `created_at` | Ledger close timestamp |
+| `interpreted` | `false` |
+| `signer_account` | Signer resolved from calldata or `unknown` |
+| `public_signals_json` | Parsed public signals from event payload or calldata |
+| `interpretation_error` | Cleared on ingest |
+
+The `audit` table has a unique key on `(contract_id, soroban_event_id)`. Rescanning the same ledger range updates the same row instead of duplicating it.
+
+After the audit upsert, the scanner inserts into `audit_chain` with `ON CONFLICT DO NOTHING`.
+
+## Checkpoint update
+
+The same database transaction updates `stellar_scans`:
+
+| Column | Meaning |
+| --- | --- |
+| `contract_id` | Contract being scanned |
+| `chain_id` | Stellar chain being scanned |
+| `block_start` | Start of the persisted scan span |
+| `block_end` | End of the persisted scan span |
+| `last_signature` | Reserved cursor field |
+
+The unique key is `(contract_id, chain_id)`, so each contract/chain pair has one checkpoint row.
+
+## Failure behavior
+
+The scanner catches and logs per-contract scan errors. A failure for one contract does not stop the scheduler from scanning other contracts in the same tick.
+
+Operationally relevant failure categories:
+
+| Failure | Effect |
+| --- | --- |
+| No contracts for chain | Scanner logs and returns |
+| RPC retention moved past checkpoint | Start ledger clamps to `oldestLedger` |
+| RPC/network failure | Scan cycle logs an error; checkpoint is not advanced for failed work |
+| Parser returns no audit row | Event is ignored |
+| Duplicate event | Upsert updates the existing `audit` row |
+| Interpretation failure | Stored later on `audit.interpretation_error`; indexing and interpretation failures are separate |
 
 ## Next stage
 
-After ingestion, rows remain encrypted and chain-specific. The [Audit events and interpretation](/architecture/audit-events-and-interpretation) pipeline decrypts payloads and produces normalized interpretation records for disclosure workflows.
+Indexing stores raw encrypted audit rows. [Audit events and interpretation](/architecture/audit-events-and-interpretation) describes how those rows become normalized `audit_interpretation` records.

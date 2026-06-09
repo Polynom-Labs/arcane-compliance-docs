@@ -1,149 +1,158 @@
 ---
 title: "Architecture overview"
-description: "Technical architecture of Arcane Compliance for Stellar/Soroban privacy-pool deployments."
+description: "Technical architecture of Arcane Compliance for the Stellar/Soroban privacy-pool path."
 ---
 
-Arcane Compliance on Stellar connects Soroban privacy-pool activity to an off-chain audit and selective-disclosure platform.
+Arcane Compliance connects Stellar/Soroban privacy-pool activity to an off-chain audit, disclosure, reporting, and activity-log system.
 
-The system has two primary runtime domains:
-
-1. **On-chain privacy layer**: Soroban privacy-pool contracts execute private asset operations and emit audit-relevant events.
-2. **Off-chain audit and disclosure platform**: Arcane indexes on-chain events, stores encrypted audit records, interprets records for review workflows, enforces permissions, and exposes scoped disclosure through the Audit API and Audit UI.
-
-Reference applications are external clients. They use wallets and the privacy SDK to submit privacy-pool operations to Soroban contracts. They are not part of the Arcane audit platform.
+This page follows the Stellar privacy-pool path implemented by the Soroban contract, the privacy-pool SDK, the NestJS backend, PostgreSQL, and the Audit UI. The backend also contains Solana confidential-token scanner and interpretation modules; those are separate chain adapters and are not shown in the Stellar/Soroban path below.
 
 ## Architecture map
 
 ```mermaid
 flowchart LR
-  subgraph client["Client / application layer"]
-    app["Reference or partner app"]
-    wallet["Wallet"]
-    sdk["Privacy SDK"]
-    app --> wallet
-    app --> sdk
+  subgraph app["External application"]
+    partner["Reference or partner app"]
+    wallet["Stellar wallet"]
+    sdk["PrivacyPoolSDK"]
+    partner --> wallet
+    partner --> sdk
   end
 
-  subgraph chain["On-chain privacy layer"]
-    contract["Soroban ZK privacy-pool contract"]
-    state["Commitments, nullifiers, roots"]
-    events["Contract events and audit payload digests"]
+  subgraph soroban["Stellar / Soroban"]
+    contract["PrivacyPoolsContract.transact"]
+    state["Contract storage: commitments, nullifiers, roots, ephemeral keys"]
+    event["AuditEncodedDigest event: message_name=transact, digest=encoded"]
     contract --> state
-    contract --> events
+    contract --> event
   end
 
-  subgraph external["External dependencies"]
-    rpc["Stellar RPC provider"]
-    idp["Enterprise identity provider"]
+  subgraph external["External services"]
+    rpc["Stellar RPC"]
+    identity["Enterprise identity provider"]
   end
 
-  subgraph arcane["Arcane audit and disclosure platform"]
-    registry["Application and contract registry"]
-    indexer["Chain indexer: ledger scanner, parser, checkpoints"]
-    raw["PostgreSQL: raw encrypted audit events"]
-    worker["Audit interpretation worker"]
-    interpreted["PostgreSQL: interpreted audit records"]
-    auth["Auth and permission module"]
-    cases["Disclosure case service"]
-    reports["Reports and export service"]
-    log["Activity log"]
-    api["Audit API"]
-    ui["Audit UI"]
+  subgraph backend["Arcane backend"]
+    auth["AuthModule, WorkosAuthModule, MagicAuthModule"]
+    registry["ApplicationsModule, ContractsModule, AssetsModule"]
+    scanner["ScannerModule, StellarRpcModule, StellarLedgerScannerService"]
+    interpreter["AuditInterpretationRunnerService"]
+    workflow["CasesModule (DisclosureRequestModule), ReportsModule, AuditorsLogModule"]
+    api["Audit API controllers and guards"]
+  end
 
-    registry --> indexer
-    indexer --> raw
-    raw --> worker
-    worker --> interpreted
-    auth --> api
-    cases --> api
-    reports --> api
-    interpreted --> cases
-    cases --> reports
-    api --> log
-    ui --> api
+  subgraph db["PostgreSQL"]
+    registryDb["chain, contracts, assets, applications"]
+    auditDb["stellar_scans, audit, audit_chain, audit_interpretation"]
+    accessDb["organisations, team_member_meta, team_member_application_permissions"]
+    workflowDb["disclosure_requests, case_requests, cases, reports, auditors_log"]
+  end
+
+  subgraph ui["Audit UI"]
+    orgUi["Organization owner workspace"]
+    appUi["Application workspace: /workspace/application/:foreignId"]
   end
 
   sdk --> contract
   wallet --> contract
-  events --> rpc
-  rpc --> indexer
-  idp --> auth
+  event --> rpc
+  rpc --> scanner
+  registry --> registryDb
+  registryDb --> scanner
+  scanner --> auditDb
+  auditDb --> interpreter
+  interpreter --> auditDb
+  identity --> auth
+  auth --> accessDb
+  api --> registryDb
+  api --> accessDb
+  api --> auditDb
+  api --> workflowDb
+  workflow --> workflowDb
+  orgUi --> api
+  appUi --> api
 ```
 
 ## Runtime boundaries
 
-| Boundary | Owned by | Responsibility |
+| Boundary | Implementation | Responsibility |
 | --- | --- | --- |
-| Reference or partner app | Application integrator | User-facing deposit, transfer, transact, and withdrawal flows |
-| Wallet and SDK | User / application integrator | Signing, private-address handling, local proof generation, and transaction construction |
-| Soroban privacy-pool contract | On-chain protocol deployment | Commitments, nullifiers, Merkle roots, proof verification, and event emission |
-| Stellar RPC provider | External infrastructure | Ledger and transaction data source for indexers |
-| Arcane indexer and workers | Arcane | Event ingestion, checkpointing, encrypted audit storage, and interpretation |
-| Arcane API and UI | Arcane | Authentication, permission checks, case workflows, reports, exports, and activity logs |
-| Enterprise identity provider | External dependency | User authentication and organization membership source |
+| External application | Reference app or partner integration | Wallet-connected user flow, SDK initialization, proof generation, transaction submission |
+| SDK and wallet | `@auditable/privacy-pool-zk-sdk` plus Stellar wallet | Coin generation, stealth address derivation, Merkle witness preparation, Groth16 proof generation, Soroban argument serialization, signing |
+| Soroban contract | `PrivacyPoolsContract` | Verify `transact` proof, check recent root, reject reused nullifiers, append output commitments, move public token legs, emit audit digest |
+| Stellar RPC | Configured RPC endpoint in `chain.rpc_url` | Ledger, transaction metadata, and Soroban event source for the scanner |
+| Backend scanner | `ScannerModule`, `StellarLedgerScannerService` | Scan registered contracts, parse successful Soroban events and `transact` calldata, upsert raw audit rows, update `stellar_scans` checkpoints |
+| Backend interpreter | `AuditInterpretationRunnerService` | Decrypt Stellar audit payloads with contract decoding keys and write normalized `audit_interpretation` rows |
+| Backend API | NestJS controllers, guards, services | Authenticated organization/application access, case workflows, reports, activity logs, server-side permission checks |
+| PostgreSQL | TypeORM entities and migrations | Registry, audit data, interpretation data, users, permissions, cases, reports, logs |
+| Audit UI | React/Vite application | Organization owner and application workspaces backed by `GET /auth/me` and scoped API routes |
+| Identity provider | WorkOS and Magic Auth modules in this codebase | OAuth/OTP login, organization selection, JWT validation, external user and organization references |
 
-## Primary data path
+## Stellar privacy-pool data path
 
-1. A user submits a privacy-pool operation from an application through a wallet and the privacy SDK.
-2. The Soroban privacy-pool contract verifies the proof and updates on-chain pool state.
-3. The contract emits audit-relevant events or encrypted audit payload digests.
-4. The Arcane indexer reads configured ledgers through Stellar RPC.
-5. The indexer filters registered contract events and writes raw encrypted audit rows.
-6. The interpretation worker converts raw events into normalized interpreted records.
-7. Case, report, and review workflows query interpreted records only through scoped API paths.
+1. The application initializes `PrivacyPoolSDK` and connects a Stellar wallet.
+2. The SDK prepares coins, Merkle witness data, Groth16 proof bytes, public signal bytes, and encrypted audit bytes.
+3. The wallet submits a Soroban invocation to `PrivacyPoolsContract.transact(from, proof_bytes, pub_signals_bytes, encoded)`.
+4. The contract calls `from.require_auth()`, validates public signals, checks the proof root against root history, rejects consumed nullifier hashes, verifies the Groth16 proof, stores two output commitments when present, applies public deposit and withdrawal token transfers, and emits `AuditEncodedDigest`.
+5. `StellarLedgerScannerService` reads configured ledger ranges through Stellar RPC for contracts stored in `contracts`.
+6. The scanner parses successful Soroban events, maps the `audit` topic to `event_type = transact`, extracts public signals and signer data from invoke calldata when available, and upserts a row into `audit`.
+7. `AuditInterpretationRunnerService` locks uninterpreted rows, runs the Stellar interpretation pipeline, decrypts `audit.cyphertext` with `contracts.decoding_key`, and replaces rows in `audit_interpretation`.
+8. Cases, reports, and transaction review endpoints query interpreted rows only after organization, application, permission, case assignment, disclosure scope, and access-window checks.
 
-## Primary access path
+## Access path
 
-1. An auditor or administrator opens the Audit UI.
-2. The user authenticates through the enterprise identity provider.
-3. The Audit API maps the authenticated identity to Arcane organization and application permissions.
-4. The permission module gates every application, case, report, transaction, and activity-log request.
-5. Approved disclosure cases grant assigned auditors scoped access to matching interpreted records.
-6. Sensitive actions are written to the activity log.
+1. A user opens the Audit UI.
+2. The UI authenticates through the backend identity flow and calls `GET /auth/me`.
+3. `AuthMeService` resolves the selected organization, owner permissions, and application permission buckets.
+4. Application buckets are keyed by `applications.foreign_id`; the UI route is `/workspace/application/:foreignId`.
+5. API guards enforce organization membership, application scope, permission keys, case assignment, and access windows.
+6. Successful sensitive actions stage and persist `auditors_log` entries with organization, application, case, actor, object, and details fields.
 
 ## Data boundaries
 
-Arcane separates raw indexed data, interpreted records, user-disclosed fields, and activity evidence.
-
-| Data class | Examples | Access model |
+| Data class | Stored in | Access model |
 | --- | --- | --- |
-| Public on-chain data | Commitments, nullifier hashes, Merkle roots, event envelopes, contract metadata | Public chain data |
-| Encrypted audit data | Raw payloads indexed from registered contract events | Backend processing only |
-| Interpreted audit records | Normalized records created by the interpretation worker | API access requires organization, application, permission, case, and scope checks |
-| User-disclosed data | Fields exposed through approved cases and reports | Visible only inside approved case/report boundaries |
-| Activity evidence | Request, approval, access, report generation, and download events | Permission-gated audit trail |
+| Public contract state | Soroban contract storage | Commitments, nullifier hashes, root history, leaf ephemeral keys, token balances, public signals, and event envelopes are public chain data |
+| Raw audit data | `audit.cyphertext`, `audit.public_signals_json`, `audit_chain` | Backend processing data; human access goes through interpretation and API checks |
+| Interpreted audit data | `audit_interpretation.payload`, `kind`, `amount_stroops` | Queried by case/review/report paths after permission and disclosure-scope checks |
+| Registry data | `chain`, `contracts`, `assets`, `applications` | Defines which contracts are scanned and how chain activity maps to organization/application context |
+| Access data | `organisations`, `team_member_meta`, `team_member_application_permissions` | Drives `auth/me`, route access, and API permissions |
+| Disclosure workflow data | `disclosure_requests`, `case_requests`, `cases`, assignment tables | Defines approved period, fields, contract filters, assigned auditors, and access duration |
+| Evidence data | `reports`, `auditors_log` | Downloadable outputs and immutable activity trail, both permission-gated |
+
+## Implementation repositories
+
+| Area | Repository |
+| --- | --- |
+| Backend, scanner, API, PostgreSQL entities | `stellar-privacy-layer-backend` |
+| Audit UI | `stellar-audit-ui` |
+| Soroban contract, circuits, SDK | `stellar-privacy-layer-contracts` |
 
 ## Core documentation
 
 <Columns cols={2}>
   <Card title="Core components" icon="diagram-project" href="/architecture/core-components">
-    Contracts, indexers, storage, workers, API, UI, and external dependencies.
+    Code-level components, backend modules, contract entrypoint, tables, API, and UI.
   </Card>
   <Card title="Data and access flows" icon="route" href="/architecture/data-and-access-flows">
-    Private transfer, indexing, interpretation, disclosure, review, and reporting flows.
+    Transaction, indexing, interpretation, disclosure, review, and reporting flows.
   </Card>
   <Card title="Reference applications" icon="mobile" href="/architecture/reference-applications">
-    User-facing applications that submit Soroban privacy-pool operations.
+    External applications that use the SDK and wallet to call the Soroban privacy-pool contract.
   </Card>
   <Card title="Cryptography" icon="key" href="/architecture/cryptography">
-    Commitments, nullifiers, private addresses, and client SDK helpers.
+    Commitments, nullifiers, stealth addresses, and SDK helpers.
   </Card>
   <Card title="Audit system" icon="server" href="/architecture/audit-system">
-    Backend control plane, storage, background jobs, and audit UI workspaces.
+    Backend modules, storage, scheduled jobs, API, and Audit UI workspaces.
   </Card>
   <Card title="Identity and access" icon="shield" href="/architecture/identity-and-access">
-    Enterprise identity, workspace resolution, permission buckets, and API enforcement.
+    Identity implementation, `auth/me`, permission buckets, route resolution, and enforcement.
   </Card>
   <Card title="On-chain indexing" icon="link" href="/architecture/on-chain-indexing">
-    Stellar RPC scanners that ingest Soroban events into encrypted audit records.
+    Stellar RPC scanner, checkpoints, event parsing, raw audit storage, and idempotency.
   </Card>
   <Card title="Disclosure and reports" icon="file-lines" href="/architecture/disclosure-cases-and-reports">
-    Cases, scoped disclosure, reports, and activity logs.
+    Disclosure requests, cases, assignments, reports, and activity logs.
   </Card>
 </Columns>
-
-## Multi-chain extension point
-
-This architecture page describes the current Stellar/Soroban privacy-pool deployment.
-
-The off-chain audit model can support other privacy rails when their events can be normalized into Arcane audit records. Each additional chain requires its own adapter, event parser, contract or program binding, and privacy assumptions. The disclosure, permission, case, report, and activity-log model remains shared only after that normalization boundary.
