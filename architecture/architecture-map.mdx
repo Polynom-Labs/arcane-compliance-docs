@@ -1,11 +1,11 @@
 ---
 title: "Architecture Map"
-description: "C4 C2 container view for the Stellar/Soroban privacy-pool and auditing-portal implementation."
+description: "Runtime components and data paths for the Stellar/Soroban privacy-pool and auditing-portal implementation."
 ---
 
-This C4 C2 view shows the deployable/runtime containers and their main data paths.
+This page shows runtime components and their main data paths.
 
-## C2: Containers
+## Runtime components
 
 ```mermaid
 flowchart LR
@@ -69,9 +69,9 @@ flowchart LR
   appUi --> api
 ```
 
-## Container responsibilities
+## Runtime responsibilities
 
-| Container | Implementation | Responsibility |
+| Component | Implementation | Responsibility |
 | --- | --- | --- |
 | Reference or partner application | Integrator application | End-user UI, wallet connection, SDK calls, Soroban transaction submission |
 | `PrivacyPoolSDK` | `stellar-privacy-layer-contracts/client-sdk` | Coin construction, stealth address helpers, witness construction, proof generation, Soroban serialization |
